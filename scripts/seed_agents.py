@@ -16,7 +16,7 @@ async def main() -> None:
     if not dsn:
         raise RuntimeError("DATABASE_URL is required")
 
-    conn = await asyncpg.connect(dsn=dsn)
+    conn = await asyncpg.connect(dsn=dsn, statement_cache_size=0)
     try:
         for persona_path in sorted(AGENTS_DIR.glob("*/persona.json")):
             persona = json.loads(persona_path.read_text(encoding="utf-8"))

@@ -20,7 +20,7 @@ async def main() -> None:
         raise RuntimeError("OPENAI_API_KEY is required")
 
     client = AsyncOpenAI()
-    conn = await asyncpg.connect(dsn=dsn)
+    conn = await asyncpg.connect(dsn=dsn, statement_cache_size=0)
     try:
         for chunk_path in sorted(AGENTS_DIR.glob("*/chunks.jsonl")):
             agent_id = chunk_path.parent.name
@@ -31,16 +31,18 @@ async def main() -> None:
                     model="text-embedding-3-small",
                     input=row["text"],
                 )
+                vec = embedding.data[0].embedding
+                vec_str = "[" + ",".join(str(v) for v in vec) + "]"
                 await conn.execute(
                     """
                     INSERT INTO chunks (agent_id, topic, tags, text, embedding)
-                    VALUES ($1, $2, $3, $4, $5)
+                    VALUES ($1, $2, $3, $4, $5::vector)
                     """,
                     agent_id,
                     row["topic"],
                     row["tags"],
                     row["text"],
-                    embedding.data[0].embedding,
+                    vec_str,
                 )
             print(f"embedded {agent_id}: {len(rows)} chunks")
     finally:
