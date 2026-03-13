@@ -1,6 +1,5 @@
 import NextAuth from "next-auth";
 import TwitterProvider from "next-auth/providers/twitter";
-import { SupabaseAdapter } from "@auth/supabase-adapter";
 
 import { createBackendToken } from "@/lib/backend-token";
 import { syncAppUser } from "@/lib/app-user";
@@ -11,10 +10,6 @@ const adminEmails = new Set(
     .map((value) => value.trim().toLowerCase())
     .filter(Boolean)
 );
-
-const hasSupabaseAdapter =
-  Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL) &&
-  Boolean(process.env.SUPABASE_SERVICE_ROLE_KEY);
 
 const providers: any[] = [];
 
@@ -29,12 +24,6 @@ if (process.env.TWITTER_CLIENT_ID && process.env.TWITTER_CLIENT_SECRET) {
 
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  adapter: hasSupabaseAdapter
-    ? SupabaseAdapter({
-        url: process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        secret: process.env.SUPABASE_SERVICE_ROLE_KEY!
-      })
-    : undefined,
   providers,
   session: {
     strategy: "jwt"
