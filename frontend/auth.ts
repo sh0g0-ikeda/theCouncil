@@ -40,14 +40,17 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (session.user) {
         session.user.id = String(token.sub ?? "");
         session.user.role = String(token.role ?? "user");
-        session.user.backendToken =
-          token.sub
-            ? await createBackendToken({
-                sub: String(token.sub),
-                email: session.user.email ?? null,
-                role: String(token.role ?? "user")
-              })
-            : undefined;
+        if (token.sub) {
+          try {
+            session.user.backendToken = await createBackendToken({
+              sub: String(token.sub),
+              email: session.user.email ?? null,
+              role: String(token.role ?? "user")
+            });
+          } catch {
+            // non-fatal: backendToken will be undefined
+          }
+        }
       }
       return session;
     }
@@ -57,11 +60,15 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       if (!user.id) {
         return;
       }
-      await syncAppUser({
-        id: user.id,
-        email: user.email ?? null,
-        role: adminEmails.has((user.email ?? "").toLowerCase()) ? "admin" : "user"
-      });
+      try {
+        await syncAppUser({
+          id: user.id,
+          email: user.email ?? null,
+          role: adminEmails.has((user.email ?? "").toLowerCase()) ? "admin" : "user"
+        });
+      } catch {
+        // non-fatal
+      }
     }
   }
 });

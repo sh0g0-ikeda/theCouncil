@@ -4,9 +4,9 @@ const TOKEN_ISSUER = "the-council-frontend";
 const TOKEN_AUDIENCE = "the-council-backend";
 
 function getSecret() {
-  const secret = process.env.NEXTAUTH_SECRET;
+  const secret = process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET;
   if (!secret) {
-    throw new Error("NEXTAUTH_SECRET is required for backend bearer tokens");
+    throw new Error("AUTH_SECRET is required for backend bearer tokens");
   }
   return new TextEncoder().encode(secret);
 }
