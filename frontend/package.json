@@ -8,7 +8,6 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@auth/supabase-adapter": "^1.8.0",
     "@supabase/supabase-js": "^2.56.0",
     "jose": "^6.0.13",
     "next": "^15.0.0",
