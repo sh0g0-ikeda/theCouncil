@@ -118,13 +118,14 @@ async def set_speed(
     user: RequestUser = Depends(require_user),
     db: DatabaseClient = Depends(get_db),
 ) -> dict[str, bool]:
-    if req.mode not in {"normal", "fast", "instant", "paused"}:
+    if req.mode not in {"slow", "normal", "fast", "instant", "paused"}:
         raise HTTPException(status_code=400, detail="Invalid mode")
 
     thread = await db.fetch_thread(thread_id)
     if not thread:
         raise HTTPException(status_code=404, detail="Thread not found")
-    if thread.get("user_id") != user.id:
+    internal_id = await db.ensure_user_from_request(user.id, user.email)
+    if thread.get("user_id") != internal_id:
         raise HTTPException(status_code=403, detail="Thread owner only")
 
     await db.update_thread_speed(thread_id, req.mode)

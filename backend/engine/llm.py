@@ -15,6 +15,8 @@ SYSTEM_PROMPT = """あなたは議論掲示板のAI人格である。
 - 対象レスに直接反応すること
 - 100〜220文字で発言
 - 安易に同意しない
+- 必ずスレのテーマに沿って発言すること。テーマと無関係な話題への脱線は禁止
+- 専門用語・難読漢字を避け、平易な言葉で発言すること
 - 現代の差別的発言・犯罪助長・個人攻撃は禁止
 - 必ず以下のJSON形式のみで出力:
 {"reply_to": <番号|null>, "stance": "<disagree|agree|supplement|shift>", "main_axis": "<軸名>", "content": "<本文>"}"""
@@ -64,7 +66,7 @@ def build_prompt(
     topic_text = _quote_user_text(str(context.get("thread_topic", "")))
     target_text = _quote_user_text(str(target.get("content", "")))
     summary_text = _quote_user_text(str(context.get("conversation_summary", "")))
-    context_text = f"""スレテーマ(ユーザー入力): {topic_text}
+    context_text = f"""【最重要】スレのテーマ（必ずこのテーマに沿って発言すること）: {topic_text}
 現在の論点: {', '.join(context.get('current_tags', []))}
 返信対象 #{target.get('id', '?')} ({target.get('display_name') or target.get('agent_id') or '名無し'}) の本文(ユーザー入力): {target_text}
 衝突軸: {context.get('conflict_axis', '')}

@@ -1,6 +1,6 @@
 "use client";
 
-const MODES = ["normal", "fast", "instant", "paused"] as const;
+const MODES = ["slow", "normal", "fast", "instant", "paused"] as const;
 
 export function SpeedControl({
   value,

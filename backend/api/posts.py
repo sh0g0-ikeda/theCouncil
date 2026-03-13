@@ -31,12 +31,12 @@ async def create_post(
         raise HTTPException(status_code=404, detail="Thread not found")
     if thread.get("locked_at"):
         raise HTTPException(status_code=423, detail="Thread is locked")
-    if not validate_reply_length(req.content):
+    internal_id = await db.ensure_user_from_request(user.id, user.email)
+    is_owner = thread.get("user_id") == internal_id
+    if not is_owner and not validate_reply_length(req.content):
         raise HTTPException(status_code=422, detail="投稿は100〜220文字で入力してください")
     if await moderate_text(req.content):
         raise HTTPException(status_code=422, detail="投稿がモデレーションにより拒否されました")
-
-    internal_id = await db.ensure_user_from_request(user.id, user.email)
     post = await db.save_post(
         thread_id=thread_id,
         agent_id=None,

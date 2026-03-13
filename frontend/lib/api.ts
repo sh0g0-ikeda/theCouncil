@@ -42,7 +42,11 @@ export function getApiBaseUrl() {
 }
 
 export function getWsBaseUrl() {
-  return process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8000";
+  const ws = process.env.NEXT_PUBLIC_WS_URL;
+  if (ws) return ws;
+  const api = process.env.NEXT_PUBLIC_API_URL ?? "";
+  if (api) return api.replace(/^https:\/\//, "wss://").replace(/^http:\/\//, "ws://");
+  return "ws://localhost:8000";
 }
 
 export async function apiFetch<T>(

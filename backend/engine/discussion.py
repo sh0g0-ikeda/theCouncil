@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 agents: dict[str, Agent] = {}
 _discussion_tasks: dict[str, asyncio.Task[None]] = {}
 
-SPEED = {"normal": 5.0, "fast": 1.5, "instant": 0.1, "paused": 999.0}
+SPEED = {"slow": 10.0, "normal": 5.0, "fast": 1.5, "instant": 0.1, "paused": 999.0}
 
 
 def load_agents() -> None:
@@ -61,6 +61,8 @@ async def run_discussion(
     compressed_upto = 0
     failed_agents: set[str] = set()
     last_post_count = -1
+    user_reply_pending = 0
+    last_user_post_id: int | None = None
 
     try:
         while True:
@@ -77,6 +79,17 @@ async def run_discussion(
             if len(posts) != last_post_count:
                 failed_agents.clear()
                 last_post_count = len(posts)
+
+            # Detect new user posts and queue 3 agent replies
+            for p in posts:
+                if (
+                    p.get("agent_id") is None
+                    and not p.get("is_facilitator")
+                    and p.get("user_id") is not None
+                    and (last_user_post_id is None or p["id"] > last_user_post_id)
+                ):
+                    last_user_post_id = p["id"]
+                    user_reply_pending = 3
 
             if len(posts) >= thread["max_posts"]:
                 await db.update_thread_state(thread_id, "completed")
@@ -119,7 +132,14 @@ async def run_discussion(
                 await asyncio.sleep(0.5)
                 continue
 
-            target = select_target_post(posts, speaker_id, agents)
+            # If pending user replies, force target to be the user post
+            if user_reply_pending > 0:
+                target = next((p for p in reversed(posts) if p["id"] == last_user_post_id), None)
+                if target is None:
+                    user_reply_pending = 0
+                    target = select_target_post(posts, speaker_id, agents)
+            else:
+                target = select_target_post(posts, speaker_id, agents)
             target_id = target["agent_id"] if target and target.get("agent_id") else None
             axis = select_conflict_axis(speaker_id, target_id, agents) if target_id else "rationalism"
 
@@ -158,6 +178,8 @@ async def run_discussion(
                 token_usage=int(reply.get("_token_usage", 0)),
             )
             failed_agents.clear()
+            if user_reply_pending > 0:
+                user_reply_pending -= 1
             await push_fn(thread_id, post)
             await asyncio.sleep(SPEED.get(thread["speed_mode"], 5.0))
     finally:
