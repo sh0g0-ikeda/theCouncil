@@ -12,7 +12,7 @@
     "@supabase/supabase-js": "^2.56.0",
     "jose": "^6.0.13",
     "next": "^15.0.0",
-    "next-auth": "^5.0.0",
+    "next-auth": "beta",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
