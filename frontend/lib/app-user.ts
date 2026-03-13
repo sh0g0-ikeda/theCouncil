@@ -12,7 +12,7 @@ export async function syncAppUser(input: SyncUserInput) {
     return;
   }
 
-  await supabase.from("users").upsert(
+  await (supabase.from("users") as any).upsert(
     {
       id: input.id,
       email: input.email,
