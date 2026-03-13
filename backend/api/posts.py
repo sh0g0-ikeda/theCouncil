@@ -1,6 +1,4 @@
-from __future__ import annotations
-
-from typing import Annotated, Any
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -25,8 +23,8 @@ async def create_post(
     request: Request,
     thread_id: str,
     req: CreatePostRequest,
-    user: Annotated[RequestUser, Depends(require_user)],
-    db: Annotated[DatabaseClient, Depends(get_db)],
+    user: RequestUser = Depends(require_user),
+    db: DatabaseClient = Depends(get_db),
 ) -> dict[str, Any]:
     thread = await db.fetch_thread(thread_id)
     if not thread or thread.get("deleted_at"):

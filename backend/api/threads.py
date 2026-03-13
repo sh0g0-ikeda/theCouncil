@@ -1,6 +1,4 @@
-from __future__ import annotations
-
-from typing import Annotated, Any
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
@@ -32,8 +30,8 @@ class SpeedRequest(BaseModel):
 async def create_thread(
     request: Request,
     req: CreateThreadRequest,
-    user: Annotated[RequestUser, Depends(require_user)],
-    db: Annotated[DatabaseClient, Depends(get_db)],
+    user: RequestUser = Depends(require_user),
+    db: DatabaseClient = Depends(get_db),
 ) -> dict[str, Any]:
     agent_ids = list(dict.fromkeys(req.agent_ids))
     if not (3 <= len(agent_ids) <= 8):
@@ -81,7 +79,7 @@ async def create_thread(
 @limiter.limit("60/minute")
 async def list_threads(
     request: Request,
-    db: Annotated[DatabaseClient, Depends(get_db)],
+    db: DatabaseClient = Depends(get_db),
     sort: str = Query(default="created_at"),
     limit: int = Query(default=20, ge=1, le=100),
 ) -> list[dict[str, Any]]:
@@ -93,7 +91,7 @@ async def list_threads(
 async def get_thread(
     request: Request,
     thread_id: str,
-    db: Annotated[DatabaseClient, Depends(get_db)],
+    db: DatabaseClient = Depends(get_db),
 ) -> dict[str, Any]:
     thread = await db.fetch_thread(thread_id)
     if not thread or thread.get("deleted_at"):
@@ -106,7 +104,7 @@ async def get_thread(
 async def get_posts(
     request: Request,
     thread_id: str,
-    db: Annotated[DatabaseClient, Depends(get_db)],
+    db: DatabaseClient = Depends(get_db),
 ) -> list[dict[str, Any]]:
     return await db.fetch_posts(thread_id)
 
@@ -117,8 +115,8 @@ async def set_speed(
     request: Request,
     thread_id: str,
     req: SpeedRequest,
-    user: Annotated[RequestUser, Depends(require_user)],
-    db: Annotated[DatabaseClient, Depends(get_db)],
+    user: RequestUser = Depends(require_user),
+    db: DatabaseClient = Depends(get_db),
 ) -> dict[str, bool]:
     if req.mode not in {"normal", "fast", "instant", "paused"}:
         raise HTTPException(status_code=400, detail="Invalid mode")

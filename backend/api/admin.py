@@ -1,6 +1,4 @@
-from __future__ import annotations
-
-from typing import Annotated, Any
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -41,8 +39,8 @@ class AgentActionRequest(BaseModel):
 @limiter.limit("30/minute")
 async def dashboard(
     request: Request,
-    _: Annotated[RequestUser, Depends(require_admin)],
-    db: Annotated[DatabaseClient, Depends(get_db)],
+    _: RequestUser = Depends(require_admin),
+    db: DatabaseClient = Depends(get_db),
 ) -> dict[str, int]:
     return await db.dashboard_stats()
 
@@ -51,8 +49,8 @@ async def dashboard(
 @limiter.limit("30/minute")
 async def list_threads(
     request: Request,
-    _: Annotated[RequestUser, Depends(require_admin)],
-    db: Annotated[DatabaseClient, Depends(get_db)],
+    _: RequestUser = Depends(require_admin),
+    db: DatabaseClient = Depends(get_db),
 ) -> list[dict[str, Any]]:
     return await db.admin_list_threads()
 
@@ -63,8 +61,8 @@ async def thread_action(
     request: Request,
     thread_id: str,
     req: ThreadActionRequest,
-    _: Annotated[RequestUser, Depends(require_admin)],
-    db: Annotated[DatabaseClient, Depends(get_db)],
+    _: RequestUser = Depends(require_admin),
+    db: DatabaseClient = Depends(get_db),
 ) -> dict[str, bool]:
     ok = await db.admin_thread_action(thread_id, req.action)
     if not ok:
@@ -76,8 +74,8 @@ async def thread_action(
 @limiter.limit("30/minute")
 async def list_posts(
     request: Request,
-    _: Annotated[RequestUser, Depends(require_admin)],
-    db: Annotated[DatabaseClient, Depends(get_db)],
+    _: RequestUser = Depends(require_admin),
+    db: DatabaseClient = Depends(get_db),
 ) -> list[dict[str, Any]]:
     return await db.admin_list_posts()
 
@@ -89,8 +87,8 @@ async def post_action(
     thread_id: str,
     post_id: int,
     req: PostActionRequest,
-    _: Annotated[RequestUser, Depends(require_admin)],
-    db: Annotated[DatabaseClient, Depends(get_db)],
+    _: RequestUser = Depends(require_admin),
+    db: DatabaseClient = Depends(get_db),
 ) -> dict[str, bool]:
     ok = await db.admin_post_action(thread_id, post_id, req.action)
     if not ok:
@@ -102,8 +100,8 @@ async def post_action(
 @limiter.limit("30/minute")
 async def list_reports(
     request: Request,
-    _: Annotated[RequestUser, Depends(require_admin)],
-    db: Annotated[DatabaseClient, Depends(get_db)],
+    _: RequestUser = Depends(require_admin),
+    db: DatabaseClient = Depends(get_db),
 ) -> list[dict[str, Any]]:
     return await db.admin_list_reports()
 
@@ -114,8 +112,8 @@ async def report_action(
     request: Request,
     report_id: int,
     req: ReportActionRequest,
-    _: Annotated[RequestUser, Depends(require_admin)],
-    db: Annotated[DatabaseClient, Depends(get_db)],
+    _: RequestUser = Depends(require_admin),
+    db: DatabaseClient = Depends(get_db),
 ) -> dict[str, bool]:
     ok = await db.admin_report_action(report_id, req.action)
     if not ok:
@@ -127,8 +125,8 @@ async def report_action(
 @limiter.limit("30/minute")
 async def list_users(
     request: Request,
-    _: Annotated[RequestUser, Depends(require_admin)],
-    db: Annotated[DatabaseClient, Depends(get_db)],
+    _: RequestUser = Depends(require_admin),
+    db: DatabaseClient = Depends(get_db),
 ) -> list[dict[str, Any]]:
     return await db.admin_list_users()
 
@@ -139,8 +137,8 @@ async def user_action(
     request: Request,
     user_id: str,
     req: UserActionRequest,
-    _: Annotated[RequestUser, Depends(require_admin)],
-    db: Annotated[DatabaseClient, Depends(get_db)],
+    _: RequestUser = Depends(require_admin),
+    db: DatabaseClient = Depends(get_db),
 ) -> dict[str, bool]:
     ok = await db.admin_user_action(user_id, req.action, req.plan)
     if not ok:
@@ -152,8 +150,8 @@ async def user_action(
 @limiter.limit("30/minute")
 async def list_agents(
     request: Request,
-    _: Annotated[RequestUser, Depends(require_admin)],
-    db: Annotated[DatabaseClient, Depends(get_db)],
+    _: RequestUser = Depends(require_admin),
+    db: DatabaseClient = Depends(get_db),
 ) -> list[dict[str, Any]]:
     return await db.admin_list_agents()
 
@@ -164,8 +162,8 @@ async def update_agent(
     request: Request,
     agent_id: str,
     req: AgentActionRequest,
-    _: Annotated[RequestUser, Depends(require_admin)],
-    db: Annotated[DatabaseClient, Depends(get_db)],
+    _: RequestUser = Depends(require_admin),
+    db: DatabaseClient = Depends(get_db),
 ) -> dict[str, bool]:
     ok = await db.admin_update_agent(agent_id, req.enabled, req.persona_json)
     if not ok:

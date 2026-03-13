@@ -1,8 +1,5 @@
-from __future__ import annotations
-
 import os
 from dataclasses import dataclass
-from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, Request
 
@@ -19,8 +16,8 @@ class RequestUser:
 
 async def require_user(
     request: Request,
-    x_user_id: Annotated[str | None, Header(alias="x-user-id")] = None,
-    x_user_email: Annotated[str | None, Header(alias="x-user-email")] = None,
+    x_user_id: str | None = Header(default=None, alias="x-user-id"),
+    x_user_email: str | None = Header(default=None, alias="x-user-email"),
 ) -> RequestUser:
     auth_user = getattr(request.state, "auth_user", None)
     if auth_user:
@@ -41,8 +38,8 @@ async def require_user(
 
 
 async def require_admin(
-    user: Annotated[RequestUser, Depends(require_user)],
-    db: Annotated[DatabaseClient, Depends(get_db)],
+    user: RequestUser = Depends(require_user),
+    db: DatabaseClient = Depends(get_db),
 ) -> RequestUser:
     record = await db.fetch_user(user.id)
     if not record or record.get("role") != "admin":

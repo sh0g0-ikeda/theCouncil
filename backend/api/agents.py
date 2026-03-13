@@ -1,6 +1,4 @@
-from __future__ import annotations
-
-from typing import Annotated, Any
+from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 
@@ -15,7 +13,7 @@ router = APIRouter(prefix="/api/agents", tags=["agents"])
 @limiter.limit("60/minute")
 async def list_public_agents(
     request: Request,
-    db: Annotated[DatabaseClient, Depends(get_db)],
+    db: DatabaseClient = Depends(get_db),
 ) -> list[dict[str, Any]]:
     rows = await db.list_public_agents()
     if rows:
