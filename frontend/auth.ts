@@ -1,5 +1,4 @@
 import NextAuth from "next-auth";
-import EmailProvider from "next-auth/providers/nodemailer";
 import TwitterProvider from "next-auth/providers/twitter";
 import { SupabaseAdapter } from "@auth/supabase-adapter";
 
@@ -29,14 +28,6 @@ if (process.env.TWITTER_CLIENT_ID && process.env.TWITTER_CLIENT_SECRET) {
   );
 }
 
-if (hasSupabaseAdapter && process.env.EMAIL_SERVER && process.env.EMAIL_FROM) {
-  providers.push(
-    EmailProvider({
-      server: process.env.EMAIL_SERVER,
-      from: process.env.EMAIL_FROM
-    })
-  );
-}
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: hasSupabaseAdapter
