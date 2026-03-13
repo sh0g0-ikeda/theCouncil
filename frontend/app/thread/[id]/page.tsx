@@ -1,0 +1,173 @@
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import { signIn, useSession } from "next-auth/react";
+import { useParams, useRouter } from "next/navigation";
+
+import { PostList } from "@/components/PostList";
+import { SpeedControl } from "@/components/SpeedControl";
+import { apiFetch, type PostRecord, type ThreadSummary } from "@/lib/api";
+import { createThreadSocket } from "@/lib/websocket";
+
+function mergePost(current: PostRecord[], incoming: PostRecord) {
+  if (current.some((post) => post.id === incoming.id && post.created_at === incoming.created_at)) {
+    return current;
+  }
+  return [...current, incoming];
+}
+
+export default function ThreadPage() {
+  const params = useParams<{ id: string }>();
+  const router = useRouter();
+  const { data: session } = useSession();
+  const [thread, setThread] = useState<ThreadSummary | null>(null);
+  const [posts, setPosts] = useState<PostRecord[]>([]);
+  const [input, setInput] = useState("");
+  const [error, setError] = useState("");
+  const [sending, setSending] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const threadId = useMemo(() => params.id, [params.id]);
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      try {
+        const [nextThread, nextPosts] = await Promise.all([
+          apiFetch<ThreadSummary>(`/api/threads/${threadId}`),
+          apiFetch<PostRecord[]>(`/api/threads/${threadId}/posts`)
+        ]);
+        if (!active) {
+          return;
+        }
+        setThread(nextThread);
+        setPosts(nextPosts);
+      } catch (err) {
+        if (!active) {
+          return;
+        }
+        setError(err instanceof Error ? err.message : "読み込みに失敗しました");
+      }
+    };
+
+    load();
+    const socket = createThreadSocket(threadId);
+    socket.onmessage = (event) => {
+      const nextPost = JSON.parse(event.data) as PostRecord;
+      setPosts((current) => mergePost(current, nextPost));
+    };
+    socket.onerror = () => {
+      setError("WebSocket 接続に失敗しました");
+    };
+
+    return () => {
+      active = false;
+      socket.close();
+    };
+  }, [threadId]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [posts]);
+
+  const submitPost = async () => {
+    if (!session?.user) {
+      await signIn();
+      return;
+    }
+    if (!input.trim()) {
+      return;
+    }
+
+    try {
+      setSending(true);
+      setError("");
+      await apiFetch(
+        `/api/threads/${threadId}/posts`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            content: input
+          })
+        },
+        session.user
+      );
+      setInput("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "投稿に失敗しました");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const updateSpeed = async (mode: string) => {
+    if (!session?.user) {
+      await signIn();
+      return;
+    }
+    try {
+      await apiFetch(
+        `/api/threads/${threadId}/speed`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ mode })
+        },
+        session.user
+      );
+      setThread((current) => (current ? { ...current, speed_mode: mode } : current));
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "速度変更に失敗しました");
+    }
+  };
+
+  if (!thread) {
+    return (
+      <main className="rounded-3xl border border-board-border bg-board-paper p-6 text-sm text-board-muted shadow-board">
+        {error || "読み込み中..."}
+      </main>
+    );
+  }
+
+  return (
+    <main className="space-y-4">
+      <section className="rounded-3xl border border-board-border bg-board-paper p-5 shadow-board">
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+          <div>
+            <h1 className="text-xl font-bold text-board-ink">{thread.topic}</h1>
+            <p className="mt-2 text-sm leading-6 text-board-muted">
+              {thread.agent_ids.join(" / ")} ・ {posts.length} レス ・ 状態 {thread.state}
+            </p>
+          </div>
+          <SpeedControl value={thread.speed_mode ?? "normal"} onChange={updateSpeed} />
+        </div>
+      </section>
+
+      <PostList posts={posts} />
+      <div ref={bottomRef} />
+
+      <section className="sticky bottom-4 rounded-3xl border border-board-border bg-board-paper/95 p-4 shadow-board backdrop-blur">
+        <textarea
+          className="h-28 w-full rounded-2xl border border-board-border bg-white px-4 py-3 text-sm leading-7 text-board-ink outline-none transition focus:border-board-accent"
+          placeholder="議論に参加（100〜220文字）"
+          value={input}
+          onChange={(event) => setInput(event.target.value)}
+          maxLength={220}
+        />
+        <div className="mt-3 flex items-center justify-between gap-4">
+          <div className="text-xs text-board-muted">
+            {input.length} / 220 {input.length < 100 ? "・100文字以上が必要です" : ""}
+            {error ? <span className="ml-3 text-board-warn">{error}</span> : null}
+          </div>
+          <button
+            type="button"
+            onClick={submitPost}
+            disabled={sending}
+            className="rounded-full bg-board-accent px-5 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {sending ? "送信中..." : "書き込む"}
+          </button>
+        </div>
+      </section>
+    </main>
+  );
+}
