@@ -36,7 +36,7 @@ async def create_post(
     if await moderate_text(req.content):
         raise HTTPException(status_code=422, detail="投稿がモデレーションにより拒否されました")
 
-    await db.ensure_user_from_request(user.id, user.email)
+    internal_id = await db.ensure_user_from_request(user.id, user.email)
     post = await db.save_post(
         thread_id=thread_id,
         agent_id=None,
@@ -45,9 +45,9 @@ async def create_post(
             "reply_to": req.reply_to,
             "stance": None,
             "focus_axis": None,
-            "user_id": user.id,
+            "user_id": internal_id,
         },
-        user_id=user.id,
+        user_id=internal_id,
         is_facilitator=False,
         token_usage=0,
     )

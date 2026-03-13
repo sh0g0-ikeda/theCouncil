@@ -29,7 +29,7 @@ class DatabaseClient:
         if asyncpg is None:
             raise RuntimeError("asyncpg is required to connect to the database")
         if self._pool is None:
-            self._pool = await asyncpg.create_pool(dsn=self._dsn, min_size=1, max_size=5)
+            self._pool = await asyncpg.create_pool(dsn=self._dsn, min_size=1, max_size=5, statement_cache_size=0)
 
     async def close(self) -> None:
         if self._pool is not None:
@@ -48,19 +48,22 @@ class DatabaseClient:
             row = await conn.fetchrow("SELECT * FROM users WHERE id = $1", user_id)
         return _row_to_dict(row)
 
-    async def ensure_user_from_request(self, user_id: str, email: str | None) -> None:
+    async def ensure_user_from_request(self, x_id: str, email: str | None) -> str:
+        """Upsert user by x_id (Twitter ID), return internal UUID."""
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
-            await conn.execute(
+            row = await conn.fetchrow(
                 """
-                INSERT INTO users (id, email)
+                INSERT INTO users (x_id, email)
                 VALUES ($1, $2)
-                ON CONFLICT (id) DO UPDATE
+                ON CONFLICT (x_id) DO UPDATE
                 SET email = COALESCE(EXCLUDED.email, users.email)
+                RETURNING id
                 """,
-                user_id,
+                x_id,
                 email,
             )
+        return str(row["id"])
 
     async def _normalize_thread_quota(self, conn: Any, user_id: str) -> dict[str, Any]:
         current_month = date.today().replace(day=1)

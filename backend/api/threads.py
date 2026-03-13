@@ -46,15 +46,15 @@ async def create_thread(
     if await moderate_text(req.topic):
         raise HTTPException(status_code=422, detail="テーマがモデレーションにより拒否されました")
 
-    await db.ensure_user_from_request(user.id, user.email)
-    account = await db.fetch_user(user.id)
+    internal_id = await db.ensure_user_from_request(user.id, user.email)
+    account = await db.fetch_user(internal_id)
     if not account:
         raise HTTPException(status_code=401, detail="User record was not provisioned")
     max_posts = clamp_max_posts(account.get("plan", "free"), req.max_posts)
     try:
         topic_tags = await generate_topic_tags(req.topic)
         thread = await db.create_thread(
-            user_id=user.id,
+            user_id=internal_id,
             topic=req.topic,
             topic_tags=topic_tags,
             agent_ids=agent_ids,
