@@ -49,8 +49,8 @@ class Agent:
         retry_hint: str | None = None,
         max_attempts: int = 3,
     ) -> dict[str, Any]:
-        from backend.engine.llm import LLMGenerationError, build_prompt, call_llm, validate_reply_length
-        from backend.engine.rag import retrieve_chunks
+        from engine.llm import LLMGenerationError, build_prompt, call_llm, validate_reply_length
+        from engine.rag import retrieve_chunks
 
         chunks = retrieve_chunks(self.id, context)
         current_retry_hint = retry_hint

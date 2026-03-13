@@ -4,9 +4,9 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
 
-from backend.db.client import DatabaseClient, get_db
-from backend.engine.discussion import agents
-from backend.rate_limit import limiter
+from db.client import DatabaseClient, get_db
+from engine.discussion import agents
+from rate_limit import limiter
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
 

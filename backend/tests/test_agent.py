@@ -1,7 +1,7 @@
 import asyncio
 
-from backend.engine.llm import LLMGenerationError
-from backend.models.agent import Agent, IdeologyVector
+from engine.llm import LLMGenerationError
+from models.agent import Agent, IdeologyVector
 
 
 def test_generate_reply_raises_after_retries_and_uses_retry_hint() -> None:
@@ -24,8 +24,8 @@ def test_generate_reply_raises_after_retries_and_uses_retry_hint() -> None:
     )
 
     async def run() -> None:
-        from backend.engine import llm as llm_module
-        from backend.engine import rag as rag_module
+        from engine import llm as llm_module
+        from engine import rag as rag_module
 
         original_call_llm = llm_module.call_llm
         original_retrieve_chunks = rag_module.retrieve_chunks

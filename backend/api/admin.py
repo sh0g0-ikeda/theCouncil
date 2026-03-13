@@ -5,11 +5,11 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from backend.api.deps import RequestUser, require_admin
-from backend.db.client import DatabaseClient, get_db
-from backend.engine.discussion import load_agents
-from backend.engine.rag import clear_chunk_cache
-from backend.rate_limit import limiter
+from api.deps import RequestUser, require_admin
+from db.client import DatabaseClient, get_db
+from engine.discussion import load_agents
+from engine.rag import clear_chunk_cache
+from rate_limit import limiter
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 

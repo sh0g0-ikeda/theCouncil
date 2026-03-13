@@ -1,4 +1,4 @@
-from backend.policies import clamp_max_posts
+from policies import clamp_max_posts
 
 
 def test_clamp_max_posts_respects_plan_limits() -> None:

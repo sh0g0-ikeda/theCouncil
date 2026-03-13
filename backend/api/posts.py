@@ -5,11 +5,11 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from backend.api.deps import RequestUser, require_user
-from backend.db.client import DatabaseClient, get_db
-from backend.engine.llm import moderate_text, validate_reply_length
-from backend.rate_limit import limiter
-from backend.realtime import connection_manager
+from api.deps import RequestUser, require_user
+from db.client import DatabaseClient, get_db
+from engine.llm import moderate_text, validate_reply_length
+from rate_limit import limiter
+from realtime import connection_manager
 
 router = APIRouter(prefix="/api/threads", tags=["posts"])
 

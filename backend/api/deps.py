@@ -6,8 +6,8 @@ from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, Request
 
-from backend.db.client import DatabaseClient, get_db
-from backend.environment import is_production_environment
+from db.client import DatabaseClient, get_db
+from environment import is_production_environment
 
 
 @dataclass(slots=True)

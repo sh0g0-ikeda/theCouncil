@@ -1,4 +1,4 @@
-from backend.engine.discussion import _build_conversation_summary, _get_phase, _role_for_phase, _should_facilitate
+from engine.discussion import _build_conversation_summary, _get_phase, _role_for_phase, _should_facilitate
 
 
 def test_phase_transitions() -> None:

@@ -5,13 +5,13 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from backend.api.deps import RequestUser, require_user
-from backend.db.client import DatabaseClient, get_db
-from backend.engine.discussion import agents, start_discussion
-from backend.engine.llm import generate_topic_tags, moderate_text
-from backend.policies import clamp_max_posts
-from backend.rate_limit import limiter
-from backend.realtime import connection_manager
+from api.deps import RequestUser, require_user
+from db.client import DatabaseClient, get_db
+from engine.discussion import agents, start_discussion
+from engine.llm import generate_topic_tags, moderate_text
+from policies import clamp_max_posts
+from rate_limit import limiter
+from realtime import connection_manager
 
 router = APIRouter(prefix="/api/threads", tags=["threads"])
 

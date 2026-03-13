@@ -1,5 +1,5 @@
-from backend.engine.selector import select_conflict_axis, select_next_agent, select_target_post
-from backend.models.agent import Agent, IdeologyVector
+from engine.selector import select_conflict_axis, select_next_agent, select_target_post
+from models.agent import Agent, IdeologyVector
 
 
 def make_agent(agent_id: str, values: list[int], beliefs: list[str] | None = None) -> Agent:

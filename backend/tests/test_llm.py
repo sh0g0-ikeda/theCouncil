@@ -1,4 +1,4 @@
-from backend.engine.llm import SYSTEM_PROMPT, build_prompt, validate_reply_length
+from engine.llm import SYSTEM_PROMPT, build_prompt, validate_reply_length
 
 
 def test_build_prompt_includes_forbidden_patterns() -> None:

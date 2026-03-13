@@ -7,11 +7,11 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from backend.db.client import get_db
-from backend.engine.facilitator import make_facilitate
-from backend.engine.llm import LLMGenerationError, compress_history
-from backend.engine.selector import select_conflict_axis, select_next_agent, select_target_post
-from backend.models.agent import Agent, IdeologyVector
+from db.client import get_db
+from engine.facilitator import make_facilitate
+from engine.llm import LLMGenerationError, compress_history
+from engine.selector import select_conflict_axis, select_next_agent, select_target_post
+from models.agent import Agent, IdeologyVector
 
 logger = logging.getLogger(__name__)
 

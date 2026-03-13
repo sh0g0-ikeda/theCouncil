@@ -10,16 +10,16 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from backend.auth import AuthError, verify_backend_token
-from backend.api.admin import router as admin_router
-from backend.api.agents import router as agents_router
-from backend.api.posts import router as posts_router
-from backend.api.threads import router as threads_router
-from backend.db.client import get_db
-from backend.environment import is_production_environment
-from backend.engine.discussion import load_agents
-from backend.rate_limit import limiter
-from backend.realtime import connection_manager
+from auth import AuthError, verify_backend_token
+from api.admin import router as admin_router
+from api.agents import router as agents_router
+from api.posts import router as posts_router
+from api.threads import router as threads_router
+from db.client import get_db
+from environment import is_production_environment
+from engine.discussion import load_agents
+from rate_limit import limiter
+from realtime import connection_manager
 
 logger = logging.getLogger(__name__)
 
