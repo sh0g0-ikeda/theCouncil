@@ -61,43 +61,73 @@ def _run_director(
     debate: "DebateState",
     agents_dict: dict[str, Any],
 ) -> None:
-    """Assign hidden per-agent directives based on debate state (no LLM, rule-based)."""
+    """Assign structured MISSION directives per agent (no LLM, rule-based).
+
+    Priority order:
+      1. rebut_core_claim  — unanswered attack against this agent
+      2. defend_self_consistency — agreement streak >= 2 (restore non_negotiable)
+      3. echo_break        — echo chamber: force a different axis
+      4. introduce_new_axis — uncovered topic axes
+      5. use_weapon        — unused arsenal items
+    """
     participant_ids: list[str] = thread.get("agent_ids", [])
     uncovered_axes = debate.get_uncovered_axes()
 
     for agent_id in participant_ids:
         if agent_id not in agents_dict:
             continue
-        # Don't overwrite an existing pending directive
         if debate.has_directive(agent_id):
             continue
 
         agent = agents_dict[agent_id]
         persona = agent.persona
+        non_neg = persona.get("speech_constraints", {}).get("non_negotiable", "")
 
-        # Priority 1: Cover topic axes no one has touched yet
+        # Priority 1: rebut_core_claim — unanswered attack against this agent
+        open_attack = debate.get_strongest_open_attack(agent_id)
+        if open_attack:
+            attacker_id, snippet = open_attack
+            attacker_name = agents_dict[attacker_id].display_name if attacker_id in agents_dict else attacker_id
+            debate.push_directive(
+                agent_id,
+                f"MISSION:rebut_core_claim｜{attacker_name}の「{snippet[:50]}」が未反論のまま残っている。"
+                f"前提・定義・証拠の弱点を一点だけ選んで直接崩せ。迂回や言い換えは失格。",
+            )
+            continue
+
+        # Priority 2: defend_self_consistency — agreement streak
+        streak = debate.agreement_streak.get(agent_id, 0)
+        if streak >= 2 and non_neg:
+            debate.push_directive(
+                agent_id,
+                f"MISSION:defend_self_consistency｜直近{streak}投が同意・補足続き。"
+                f"「{non_neg[:55]}」という核心に立ち返り、今回は必ず disagree か shift で切り返せ。",
+            )
+            continue
+
+        # Priority 3: echo_break — break echo chamber axis
+        if debate.is_echo_chamber():
+            agent_recent = set(debate.get_agent_recent_axes(agent_id))
+            candidates = [a for a in uncovered_axes if a not in agent_recent]
+            if candidates:
+                debate.push_directive(
+                    agent_id,
+                    f"MISSION:echo_break｜同じ軸での議論が続いている。「{candidates[0]}」の観点だけで斬り込め。他の軸に触れるな。",
+                )
+                continue
+
+        # Priority 4: introduce_new_axis — uncovered topic axes
         if uncovered_axes:
             agent_recent = set(debate.get_agent_recent_axes(agent_id))
             candidates = [a for a in uncovered_axes if a not in agent_recent]
             if candidates:
                 debate.push_directive(
                     agent_id,
-                    f"「{candidates[0]}」の観点はまだ誰も触れていない。次の発言でこの軸から独自に切り込め。",
+                    f"MISSION:introduce_new_axis｜「{candidates[0]}」の観点はまだ誰も触れていない。この軸だけで切り込め。",
                 )
                 continue
 
-        # Priority 2: Character drift — restore core position
-        stance_hist = debate.stance_history.get(agent_id, [])
-        if len(stance_hist) >= 3 and all(s in {"agree", "supplement"} for s in stance_hist[-3:]):
-            non_neg = persona.get("speech_constraints", {}).get("non_negotiable", "")
-            if non_neg:
-                debate.push_directive(
-                    agent_id,
-                    f"直近3投が同意・補足続き。「{non_neg[:60]}」という核心に立ち返り、明確に反論せよ。",
-                )
-                continue
-
-        # Priority 3: Push unused arsenal items the character hasn't deployed yet
+        # Priority 5: use_weapon — deploy unused arsenal item
         if debate.has_unused_arsenal(agent_id, persona):
             available = debate.get_available_arsenal(agent_id, persona)
             used = debate.used_arsenal_ids.get(agent_id, set())
@@ -105,28 +135,64 @@ def _run_director(
             if unused:
                 debate.push_directive(
                     agent_id,
-                    f"まだ使っていない固有の論点「{unused[0]['desc'][:45]}」を今回の論拠に使え。",
+                    f"MISSION:use_weapon｜「{unused[0]['desc'][:45]}」という固有の論拠をまだ使っていない。今回これを核心に据えて論じよ。",
                 )
 
 
-def _should_direct(posts: list[dict[str, Any]]) -> bool:
-    """Fire director every 4 posts, but not on the same turn as facilitator."""
-    if not posts:
+def _needs_director(posts: list[dict[str, Any]], debate: "DebateState") -> bool:
+    """Fire director when debate conditions require intervention (event-driven)."""
+    ai_posts = [p for p in posts if p.get("agent_id")]
+    if len(ai_posts) < 3:
         return False
-    n = len(posts)
-    return n >= 4 and n % 4 == 0 and n % 7 != 0
+    # Always fire when unanswered attacks exist
+    if debate.open_attacks:
+        return True
+    # Any agent has agreement streak >= 2
+    if any(v >= 2 for v in debate.agreement_streak.values()):
+        return True
+    # Echo chamber detected
+    if debate.is_echo_chamber():
+        return True
+    # Same axis repeated in last 2 AI posts
+    recent_axes = [p.get("focus_axis") for p in ai_posts[-2:] if p.get("focus_axis")]
+    if len(recent_axes) == 2 and recent_axes[0] == recent_axes[1]:
+        return True
+    # Periodic sweep for uncovered axes (every 4 posts, as baseline)
+    n = len(ai_posts)
+    if n >= 4 and n % 4 == 0 and debate.get_uncovered_axes():
+        return True
+    return False
 
 
 def _should_facilitate(posts: list[dict[str, Any]]) -> bool:
-    if not posts:
+    """Event-driven facilitator: fires only when structural problems are detected."""
+    if not posts or posts[-1].get("is_facilitator", False):
         return False
-    if posts[-1].get("is_facilitator", False):
-        return False
-    n = len(posts)
-    # Early definitional intervention: fire at post 3 to anchor key terms
-    if n == 3:
+    # Minimum gap: 5 posts since last facilitation
+    for p in posts[-5:]:
+        if p.get("is_facilitator"):
+            return False
+    ai_posts = [p for p in posts if p.get("agent_id")]
+    n_ai = len(ai_posts)
+    # Early definitional: once at post 3 only
+    if len(posts) == 3:
         return True
-    return n % 7 == 0
+    if n_ai < 4:
+        return False
+    # Condition 1: Same axis 3 consecutive (echo chamber forming)
+    recent_axes = [p.get("focus_axis") for p in ai_posts[-3:] if p.get("focus_axis")]
+    if len(recent_axes) == 3 and len(set(recent_axes)) == 1:
+        return True
+    # Condition 2: Soft-stance domination (4+ agree/supplement in last 5 AI posts)
+    recent_stances = [p.get("stance") for p in ai_posts[-5:] if p.get("stance") and p["stance"] != "facilitate"]
+    if len(recent_stances) >= 4 and sum(1 for s in recent_stances if s in {"agree", "supplement"}) >= 4:
+        return True
+    # Condition 3: Parallel monologues (no cross-targeting for 5 posts)
+    if n_ai >= 5:
+        no_replies = sum(1 for p in ai_posts[-5:] if not p.get("reply_to"))
+        if no_replies >= 4:
+            return True
+    return False
 
 
 async def run_discussion(
@@ -215,8 +281,8 @@ async def run_discussion(
             if phase != thread["current_phase"]:
                 await db.update_thread_phase(thread_id, phase)
 
-            # ── Silent director (rule-based, every 4 posts, no visible post) ──
-            if _should_direct(posts):
+            # ── Silent director (rule-based, event-driven, no visible post) ──
+            if _needs_director(posts, debate):
                 _run_director(thread, debate, agents)
 
             if _should_facilitate(posts):
@@ -248,7 +314,7 @@ async def run_discussion(
                     continue
 
             # ── Speaker selection ──────────────────────────────────────────
-            # Priority: user-reply > retaliation > random-event > normal
+            # Priority: user-reply > score-based > normal
             newcomer_hint = False
             # Hard-exclude agents who spoke in the last 3 AI posts (prevents 2-bot loop)
             recent_ai_speakers = {p["agent_id"] for p in posts[-3:] if p.get("agent_id")}
@@ -260,29 +326,28 @@ async def run_discussion(
                     await asyncio.sleep(0.5)
                     continue
             else:
-                retaliator = debate.pop_retaliator(
-                    thread["agent_ids"], failed_agents | recent_ai_speakers, last_speaker_id or ""
+                hard_excluded = failed_agents | recent_ai_speakers
+                stagnating = _detect_stagnation(posts, debate)
+                # Score-based priority: open attacks + agreement streak take precedence
+                priority = _prioritize_speaker(
+                    thread["agent_ids"], posts, debate, agents, hard_excluded
                 )
-                if retaliator:
-                    speaker_id = retaliator
+                if priority:
+                    speaker_id = priority
+                elif stagnating:
+                    silent = select_silent_agent(thread, agents, posts, excluded_agent_ids=hard_excluded)
+                    speaker_id = silent if silent else _fallback_speaker(thread, agents, posts, hard_excluded)
+                    newcomer_hint = True
                 else:
-                    stagnating = _detect_stagnation(posts, debate)
-                    hard_excluded = failed_agents | recent_ai_speakers
-                    if stagnating:
-                        silent = select_silent_agent(thread, agents, posts, excluded_agent_ids=hard_excluded)
-                        speaker_id = silent if silent else _fallback_speaker(thread, agents, posts, hard_excluded)
-                        newcomer_hint = True
-                    else:
+                    try:
+                        speaker_id = select_next_agent(thread, agents, posts, excluded_agent_ids=hard_excluded, debate_state=debate)
+                    except ValueError:
                         try:
-                            speaker_id = select_next_agent(thread, agents, posts, excluded_agent_ids=hard_excluded, debate_state=debate)
+                            speaker_id = select_next_agent(thread, agents, posts, excluded_agent_ids=failed_agents, debate_state=debate)
                         except ValueError:
-                            # Relax exclusion if no candidates (small thread)
-                            try:
-                                speaker_id = select_next_agent(thread, agents, posts, excluded_agent_ids=failed_agents, debate_state=debate)
-                            except ValueError:
-                                failed_agents.clear()
-                                await asyncio.sleep(0.5)
-                                continue
+                            failed_agents.clear()
+                            await asyncio.sleep(0.5)
+                            continue
 
             # ── Target selection ───────────────────────────────────────────
             if user_reply_pending > 0:
@@ -296,11 +361,9 @@ async def run_discussion(
             axis = select_conflict_axis(speaker_id, target_id, agents) if target_id else "rationalism"
 
             # ── Debate function selection ───────────────────────────────────
+            # Emotions (anger/contempt) affect prompt style only — not function selection
             stagnating = _detect_stagnation(posts, debate)
-            anger_override = debate.get_aggression_boost(speaker_id, target_id)
-            if anger_override:
-                debate_fn = anger_override
-            elif stagnating:
+            if stagnating:
                 debate_fn = random.choice(["concretize", "differentiate", "attack"])
             else:
                 debate_fn = _select_debate_function(speaker_id, phase, agents, debate)
@@ -405,6 +468,50 @@ async def run_discussion(
             await asyncio.sleep(SPEED.get(thread["speed_mode"], 5.0))
     finally:
         _discussion_tasks.pop(thread_id, None)
+
+
+def _prioritize_speaker(
+    participant_ids: list[str],
+    posts: list[dict[str, Any]],
+    debate: DebateState,
+    agents_dict: dict[str, Any],
+    excluded: set[str],
+) -> str | None:
+    """Return highest-priority speaker based on open attacks + stance drift, or None.
+
+    Scores:
+      +3  has unanswered attack against them
+      +2  agreement streak >= 2 (stance drift)
+      +1  has unused primary arsenal
+      -2  spoke in last 2 AI posts
+      -2  repeated same axis in last 2 own posts
+    Returns None when no agent has a positive priority score (fall through to normal selection).
+    """
+    last_2 = {p["agent_id"] for p in posts[-2:] if p.get("agent_id")}
+    scored: list[tuple[str, int]] = []
+    for agent_id in participant_ids:
+        if agent_id not in agents_dict or agent_id in excluded:
+            continue
+        score = 0
+        if debate.has_open_attack_against(agent_id):
+            score += 3
+        if debate.agreement_streak.get(agent_id, 0) >= 2:
+            score += 2
+        if debate.has_unused_arsenal(agent_id, agents_dict[agent_id].persona):
+            score += 1
+        if agent_id in last_2:
+            score -= 2
+        own_axes = debate.get_agent_recent_axes(agent_id)
+        if len(own_axes) >= 2 and own_axes[-1] == own_axes[-2]:
+            score -= 2
+        scored.append((agent_id, score))
+    if not scored:
+        return None
+    max_score = max(s for _, s in scored)
+    if max_score <= 0:
+        return None
+    top = [aid for aid, s in scored if s >= max_score]
+    return random.choice(top)
 
 
 def _fallback_speaker(

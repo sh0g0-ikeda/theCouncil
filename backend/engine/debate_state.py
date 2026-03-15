@@ -34,6 +34,10 @@ class DebateState:
         self.agent_axis_usage: dict[str, list[str]] = {}
         # Hidden director: per-agent private directive queue (not shown to frontend)
         self.agent_directives: dict[str, list[str]] = {}
+        # Open attacks: unanswered attacks — (attacker_id, content_snippet, target_id)
+        self.open_attacks: list[tuple[str, str, str]] = []
+        # Per-agent agreement streak (consecutive agree/supplement count)
+        self.agreement_streak: dict[str, int] = {}
 
     def record_post(
         self,
@@ -54,8 +58,27 @@ class DebateState:
             if len(self.retaliation_queue) > 6:
                 self.retaliation_queue.pop(0)
 
-        # Update internal states
+        # Update internal states (style only — not used for content control)
         self._update_internal_states(speaker_id, target_agent)
+
+        # Track open attacks: attack/steelman directed at another agent → unanswered
+        if debate_function in {"attack", "steelman"} and target_agent and target_agent != speaker_id:
+            snippet = str(target_post.get("content", ""))[:60]
+            self.open_attacks.append((speaker_id, snippet, target_agent))
+            if len(self.open_attacks) > 8:
+                self.open_attacks.pop(0)
+
+        # Resolve open attacks: a disagree/shift response clears attacks against the speaker
+        if stance in {"disagree", "shift"} and target_agent:
+            self.open_attacks = [
+                (a, c, t) for (a, c, t) in self.open_attacks if t != speaker_id
+            ]
+
+        # Track agreement streak (for stance drift scoring)
+        if stance in {"agree", "supplement"}:
+            self.agreement_streak[speaker_id] = self.agreement_streak.get(speaker_id, 0) + 1
+        else:
+            self.agreement_streak[speaker_id] = 0
 
         # Global axis tracking
         if focus_axis:
@@ -242,6 +265,18 @@ class DebateState:
     def has_directive(self, agent_id: str) -> bool:
         return bool(self.agent_directives.get(agent_id))
 
+    # ── Open attacks (unanswered) ─────────────────────────────────────────────
+
+    def has_open_attack_against(self, agent_id: str) -> bool:
+        return any(t == agent_id for (_, _, t) in self.open_attacks)
+
+    def get_strongest_open_attack(self, agent_id: str) -> tuple[str, str] | None:
+        """Return (attacker_id, content_snippet) of the most recent unanswered attack against agent_id."""
+        for attacker_id, snippet, target in reversed(self.open_attacks):
+            if target == agent_id:
+                return (attacker_id, snippet)
+        return None
+
     def to_dict(self) -> dict:
         return {
             "anger": [[k[0], k[1], v] for k, v in self.anger.items()],
@@ -257,6 +292,8 @@ class DebateState:
             "topic_axes": self.topic_axes,
             "agent_axis_usage": self.agent_axis_usage,
             "agent_directives": self.agent_directives,
+            "open_attacks": [list(t) for t in self.open_attacks],
+            "agreement_streak": self.agreement_streak,
         }
 
     @classmethod
@@ -296,4 +333,10 @@ class DebateState:
         instance.agent_directives = {
             k: list(v) for k, v in data.get("agent_directives", {}).items()
         }
+        instance.open_attacks = [
+            (str(item[0]), str(item[1]), str(item[2]))
+            for item in data.get("open_attacks", [])
+            if isinstance(item, (list, tuple)) and len(item) == 3
+        ]
+        instance.agreement_streak = {k: int(v) for k, v in data.get("agreement_streak", {}).items()}
         return instance
