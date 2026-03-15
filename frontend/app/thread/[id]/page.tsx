@@ -57,8 +57,8 @@ export default function ThreadPage() {
       const nextPost = JSON.parse(event.data) as PostRecord;
       setPosts((current) => mergePost(current, nextPost));
     };
-    socket.onerror = () => {
-      if (!pollRef.current) {
+    const startPolling = () => {
+      if (!pollRef.current && activeRef.current) {
         pollRef.current = setInterval(async () => {
           try {
             const np = await apiFetch<PostRecord[]>(`/api/threads/${threadId}/posts`);
@@ -67,6 +67,8 @@ export default function ThreadPage() {
         }, 4000);
       }
     };
+    socket.onerror = () => startPolling();
+    socket.onclose = () => startPolling();
 
     return () => {
       active = false;
@@ -92,7 +94,7 @@ export default function ThreadPage() {
     try {
       setSending(true);
       setError("");
-      await apiFetch(
+      const newPost = await apiFetch<PostRecord>(
         `/api/threads/${threadId}/posts`,
         {
           method: "POST",
@@ -102,6 +104,7 @@ export default function ThreadPage() {
         },
         session.user
       );
+      setPosts((current) => mergePost(current, newPost));
       setInput("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "投稿に失敗しました");
