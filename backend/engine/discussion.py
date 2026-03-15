@@ -56,6 +56,67 @@ async def start_discussion(
     _discussion_tasks[thread_id] = asyncio.create_task(run_discussion(thread_id, push_fn))
 
 
+def _run_director(
+    thread: dict[str, Any],
+    debate: "DebateState",
+    agents_dict: dict[str, Any],
+) -> None:
+    """Assign hidden per-agent directives based on debate state (no LLM, rule-based)."""
+    participant_ids: list[str] = thread.get("agent_ids", [])
+    uncovered_axes = debate.get_uncovered_axes()
+
+    for agent_id in participant_ids:
+        if agent_id not in agents_dict:
+            continue
+        # Don't overwrite an existing pending directive
+        if debate.has_directive(agent_id):
+            continue
+
+        agent = agents_dict[agent_id]
+        persona = agent.persona
+
+        # Priority 1: Cover topic axes no one has touched yet
+        if uncovered_axes:
+            agent_recent = set(debate.get_agent_recent_axes(agent_id))
+            candidates = [a for a in uncovered_axes if a not in agent_recent]
+            if candidates:
+                debate.push_directive(
+                    agent_id,
+                    f"「{candidates[0]}」の観点はまだ誰も触れていない。次の発言でこの軸から独自に切り込め。",
+                )
+                continue
+
+        # Priority 2: Character drift — restore core position
+        stance_hist = debate.stance_history.get(agent_id, [])
+        if len(stance_hist) >= 3 and all(s in {"agree", "supplement"} for s in stance_hist[-3:]):
+            non_neg = persona.get("speech_constraints", {}).get("non_negotiable", "")
+            if non_neg:
+                debate.push_directive(
+                    agent_id,
+                    f"直近3投が同意・補足続き。「{non_neg[:60]}」という核心に立ち返り、明確に反論せよ。",
+                )
+                continue
+
+        # Priority 3: Push unused arsenal items the character hasn't deployed yet
+        if debate.has_unused_arsenal(agent_id, persona):
+            available = debate.get_available_arsenal(agent_id, persona)
+            used = debate.used_arsenal_ids.get(agent_id, set())
+            unused = [a for a in available if a["id"] not in used]
+            if unused:
+                debate.push_directive(
+                    agent_id,
+                    f"まだ使っていない固有の論点「{unused[0]['desc'][:45]}」を今回の論拠に使え。",
+                )
+
+
+def _should_direct(posts: list[dict[str, Any]]) -> bool:
+    """Fire director every 4 posts, but not on the same turn as facilitator."""
+    if not posts:
+        return False
+    n = len(posts)
+    return n >= 4 and n % 4 == 0 and n % 7 != 0
+
+
 def _should_facilitate(posts: list[dict[str, Any]]) -> bool:
     if not posts:
         return False
@@ -153,6 +214,10 @@ async def run_discussion(
             phase = _get_phase(len(posts))
             if phase != thread["current_phase"]:
                 await db.update_thread_phase(thread_id, phase)
+
+            # ── Silent director (rule-based, every 4 posts, no visible post) ──
+            if _should_direct(posts):
+                _run_director(thread, debate, agents)
 
             if _should_facilitate(posts):
                 agent_display_names = {
@@ -254,6 +319,7 @@ async def run_discussion(
             arsenal_novelty = debate.has_unused_arsenal(speaker_id, agents[speaker_id].persona)
             debate_role = debate.get_debate_role(speaker_id)
             forced_axis = debate.pop_forced_axis(speaker_id)
+            private_directive = debate.pop_directive(speaker_id)
             agent_recent_axes = debate.get_agent_recent_axes(speaker_id)
             uncovered_axes = debate.get_uncovered_axes()
             is_user_post_reply = (user_reply_pending > 0 and target is not None and target.get("user_id") is not None)
@@ -275,6 +341,7 @@ async def run_discussion(
                 "newcomer_event": newcomer_hint,
                 "debate_role": debate_role,
                 "forced_axis": forced_axis or "",
+                "private_directive": private_directive or "",
                 "topic_axes": debate.topic_axes,
                 "agent_recent_axes": agent_recent_axes,
                 "uncovered_axes": uncovered_axes,

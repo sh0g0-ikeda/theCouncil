@@ -210,6 +210,9 @@ def build_prompt(
         context_text += "\n👤 返信先はユーザー投稿：ユーザーの発言も論破・再定義の対象。「〜は当然」「〜は悪い」等の自明命題でもその前提・定義・適用範囲を問い、あなたの独自の論理で斬り直せ。受け入れてはいけない。"
     if context.get("moral_suction_warning"):
         context_text += "\n🚫 【道徳論吸引警告】直近に道徳・倫理・人権を絶対的前提とした発言がある。その道徳観を受け入れず、評価軸そのものを疑え。「差別は悪い」→「ではその定義と境界線はどこか」のように枠組みを崩せ。感情論・倫理絶対論に乗るな。"
+    private_directive = context.get("private_directive", "")
+    if private_directive:
+        context_text += f"\n🎬 【内部指令・非公開】{private_directive}"
     if retry_hint:
         context_text += f"\n修正: {retry_hint}"
 

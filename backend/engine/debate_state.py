@@ -32,6 +32,8 @@ class DebateState:
         self.topic_axes: list[str] = []
         # Per-agent axis usage history (last 4 axes per agent)
         self.agent_axis_usage: dict[str, list[str]] = {}
+        # Hidden director: per-agent private directive queue (not shown to frontend)
+        self.agent_directives: dict[str, list[str]] = {}
 
     def record_post(
         self,
@@ -224,6 +226,22 @@ class DebateState:
                 return axis
         return None
 
+    # ── Hidden director directives ───────────────────────────────────────────
+
+    def push_directive(self, agent_id: str, directive: str) -> None:
+        """Queue a private instruction for an agent (not shown to frontend)."""
+        queue = self.agent_directives.setdefault(agent_id, [])
+        if len(queue) < 3:  # cap to prevent stale pile-up
+            queue.append(directive)
+
+    def pop_directive(self, agent_id: str) -> str | None:
+        """Return and remove the next private directive for this agent."""
+        queue = self.agent_directives.get(agent_id)
+        return queue.pop(0) if queue else None
+
+    def has_directive(self, agent_id: str) -> bool:
+        return bool(self.agent_directives.get(agent_id))
+
     def to_dict(self) -> dict:
         return {
             "anger": [[k[0], k[1], v] for k, v in self.anger.items()],
@@ -238,6 +256,7 @@ class DebateState:
             "forced_axis_queue": self.forced_axis_queue,
             "topic_axes": self.topic_axes,
             "agent_axis_usage": self.agent_axis_usage,
+            "agent_directives": self.agent_directives,
         }
 
     @classmethod
@@ -274,4 +293,7 @@ class DebateState:
             (item[0], item[1]) for item in data.get("forced_axis_queue", [])
             if isinstance(item, (list, tuple)) and len(item) == 2
         ]
+        instance.agent_directives = {
+            k: list(v) for k, v in data.get("agent_directives", {}).items()
+        }
         return instance
