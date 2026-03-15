@@ -20,6 +20,14 @@ logger = logging.getLogger(__name__)
 agents: dict[str, Agent] = {}
 _discussion_tasks: dict[str, asyncio.Task[None]] = {}
 
+# Keywords that indicate a moralistic/discussion-stopping post
+_MORAL_KEYWORDS = {"差別", "倫理", "道徳", "人権", "正義", "に決まって", "絶対悪", "許されない", "当然", "べきでない"}
+
+
+def _is_moral_suction(content: str) -> bool:
+    """Return True if a post is likely to pull agents into unproductive moral discourse."""
+    return sum(1 for kw in _MORAL_KEYWORDS if kw in content) >= 2
+
 SPEED = {"slow": 8.5, "normal": 3.5, "fast": 0.3, "instant": 0.1, "paused": 999.0}
 
 
@@ -74,6 +82,7 @@ async def run_discussion(
     last_speaker_id: str | None = None
     event_counter = 0
     roles_initialized = debate.roles_initialized()
+    moral_suction_active = 0  # countdown: resist moral framing for N more posts
 
     try:
         while True:
@@ -121,6 +130,9 @@ async def run_discussion(
                 ):
                     last_user_post_id = p["id"]
                     user_reply_pending = 3
+                    # If user post contains moralizing language, arm the suction guard
+                    if _is_moral_suction(p.get("content", "")):
+                        moral_suction_active = 5  # next 5 AI posts get resistance directive
 
             if len(posts) >= thread["max_posts"]:
                 await db.update_thread_state(thread_id, "completed")
@@ -238,6 +250,8 @@ async def run_discussion(
             forced_axis = debate.pop_forced_axis(speaker_id)
             agent_recent_axes = debate.get_agent_recent_axes(speaker_id)
             uncovered_axes = debate.get_uncovered_axes()
+            is_user_post_reply = (user_reply_pending > 0 and target is not None and target.get("user_id") is not None)
+            target_is_moral = is_user_post_reply and _is_moral_suction(target.get("content", "") if target else "")
             context = {
                 "thread_topic": thread["topic"],
                 "current_tags": thread["topic_tags"],
@@ -261,6 +275,8 @@ async def run_discussion(
                 "stance_drift_warning": stance_drift,
                 "arsenal_novelty_push": arsenal_novelty,
                 "is_first_post": is_first_post,
+                "user_post_reply": is_user_post_reply,
+                "moral_suction_warning": target_is_moral or moral_suction_active > 0,
             }
 
             try:
@@ -305,6 +321,8 @@ async def run_discussion(
             )
             if user_reply_pending > 0:
                 user_reply_pending -= 1
+            if moral_suction_active > 0:
+                moral_suction_active -= 1
             await push_fn(thread_id, post)
             if event_counter % 5 == 0:
                 try:
@@ -349,7 +367,7 @@ def _select_debate_function(speaker_id: str, phase: int, agents_dict: dict[str, 
 
     # Phase weights: [define, differentiate, attack, steelman, concretize, synthesize]
     if phase <= 1:
-        weights = [5, 5, 1, 0, 1, 0]   # early: define/differentiate only
+        weights = [8, 4, 0, 0, 0, 0]   # early: define/differentiate ONLY — no attack yet
     elif phase == 2:
         weights = [1, 2, 4, 1, 4, 1]   # mid: attack + concretize
     elif phase == 3:
