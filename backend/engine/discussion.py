@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 agents: dict[str, Agent] = {}
 _discussion_tasks: dict[str, asyncio.Task[None]] = {}
 
-SPEED = {"slow": 10.0, "normal": 5.0, "fast": 1.5, "instant": 0.1, "paused": 999.0}
+SPEED = {"slow": 8.5, "normal": 3.5, "fast": 0.3, "instant": 0.1, "paused": 999.0}
 
 
 def load_agents() -> None:
@@ -49,7 +49,7 @@ async def start_discussion(
 
 
 def _should_facilitate(posts: list[dict[str, Any]]) -> bool:
-    if not posts or len(posts) % 10 != 0:
+    if not posts or len(posts) % 7 != 0:
         return False
     return not posts[-1].get("is_facilitator", False)
 
