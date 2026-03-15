@@ -41,14 +41,13 @@ SYSTEM_PROMPT = """あなたは議論掲示板のAI人格である。なんJ・5
 3. 80〜180文字・2〜4文で書け。
 4. 「一理あるが」「確かに〜だが」「重要だが〜も必要」等の調整型表現は禁止。
 5. 差別的発言・犯罪助長・個人攻撃は禁止。
-6. 【最重要】まず自分の立場・結論を一言で断言してから論じ始めよ。「〜が最も優れている」「〜こそが正解や」など、アンサーファーストで入れ。抽象論から入ることは失格。
 
 JSONのみ出力:
 {"stance": "<disagree|agree|supplement|shift>", "main_axis": "<軸名>", "content": "<本文>", "used_arsenal_id": "<使った武器id|null>"}"""
 
 # Phase-specific directives injected into the user prompt
 _PHASE_DIRECTIVES: dict[int, str] = {
-    1: "【フェーズ1・定義期】テーマへの自分の答えを冒頭で断言せよ（例：「〜が最も優れた政体や」「〜こそ正解や」）。次に自分の立場・前提を定義せよ。まだ攻撃するな。",
+    1: "【フェーズ1・定義期】自分の立場・前提を定義せよ。まだ攻撃するな。",
     2: "【フェーズ2・対立期】攻撃・具体化に集中。定義の争いより論点の衝突を優先せよ。",
     3: "【フェーズ3・激化期】最も鋭い攻撃か steelman→崩しを出せ。手加減は失格。",
     4: "【フェーズ4・転換期】これまでの論点より一段深い角度か、相手の根本的な盲点を突け。",
@@ -163,8 +162,10 @@ def build_prompt(
         context_text += "\n⚠️ 立場崩壊警告：直近で agree/supplement が続いた。今回は必ず disagree か shift で自分の立場を明確に出せ。"
     if context.get("stagnation"):
         context_text += "\n⚠️ 議論停滞中：まったく別の事例・数字・歴史・思考実験で強制的に打開せよ"
+    if context.get("is_first_post"):
+        context_text += "\n🔰 初投稿：冒頭でテーマへの自分の答えを一言で断言せよ（例：「〜が最も優れた政体や」「〜こそ正解や」）。抽象論から入るな。"
     if context.get("newcomer_event"):
-        context_text += "\n🆕 初発言：誰も触れていない角度で割り込め"
+        context_text += "\n🆕 新規割込み：誰も触れていない角度で入れ"
     if retry_hint:
         context_text += f"\n修正: {retry_hint}"
 

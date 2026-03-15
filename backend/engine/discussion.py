@@ -197,6 +197,7 @@ async def run_discussion(
             recent_posts = posts[compressed_upto:]
             # Expand self-history to 4 for novelty detection
             recent_self = [p["content"] for p in posts[-8:] if p.get("agent_id") == speaker_id][-4:]
+            is_first_post = not any(p.get("agent_id") == speaker_id for p in posts)
             recent_others = [
                 p["content"] for p in posts[-6:]
                 if p.get("agent_id") and p.get("agent_id") != speaker_id
@@ -221,6 +222,7 @@ async def run_discussion(
                 "newcomer_event": newcomer_hint,
                 "stance_drift_warning": stance_drift,
                 "arsenal_novelty_push": arsenal_novelty,
+                "is_first_post": is_first_post,
             }
 
             try:
