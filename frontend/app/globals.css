@@ -9,10 +9,7 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background:
-    linear-gradient(180deg, rgba(245, 235, 215, 0.72) 0%, rgba(234, 217, 183, 0.82) 100%),
-    radial-gradient(circle at top left, rgba(255, 255, 255, 0.38), transparent 26%),
-    url("/image.png") center top / cover fixed no-repeat;
+  background: url("/image.png") center top / cover fixed no-repeat;
   color: #2b2218;
   font-family: "BIZ UDPGothic", "Yu Gothic UI", "Hiragino Sans", sans-serif;
 }
