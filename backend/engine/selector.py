@@ -3,10 +3,10 @@ from __future__ import annotations
 import random
 from typing import Any
 
-ALPHA = 0.4
-BETA = 0.2
-GAMMA = 0.25
-DELTA = 0.15
+ALPHA = 0.35   # opposition (ideological distance)
+BETA  = 0.25   # silence bonus (equity)
+GAMMA = 0.15   # topic match  ← 0.25から下げる：特定2人への偏りを防ぐ
+DELTA = 0.25   # diversity    ← 0.15から上げる：直近発言者を強く排除
 
 AXES = [
     "state_control",
@@ -69,7 +69,8 @@ def select_next_agent(
         for agent_id in participant_ids
     }
     avg_count = sum(post_counts.values()) / len(participant_ids)
-    recent_agents = [post["agent_id"] for post in posts[-3:] if post.get("agent_id")]
+    # Expand window to 6 to better detect loops between 2 agents
+    recent_agents = {post["agent_id"] for post in posts[-6:] if post.get("agent_id")}
     current_tags = thread.get("topic_tags", [])
     last_vector = agents[last_agent_id].vector if last_agent_id in agents else None
 
@@ -85,7 +86,13 @@ def select_next_agent(
             + agent.persona.get("combat_doctrine", agent.persona.get("values", []))
         )
         topic_match = sum(1 for tag in current_tags if tag in persona_text) / max(len(current_tags), 1)
-        diversity = 0.0 if agent_id in recent_agents else 1.0
+        # Diversity: 0 if spoke in last 6, 0.5 if spoke in last 3, 1 if not recent
+        if agent_id in {p["agent_id"] for p in posts[-3:] if p.get("agent_id")}:
+            diversity = 0.0
+        elif agent_id in recent_agents:
+            diversity = 0.5
+        else:
+            diversity = 1.0
         # Arsenal novelty boost: agents with unused unique arguments get +0.15
         arsenal_boost = 0.15 if (
             debate_state is not None
@@ -98,8 +105,8 @@ def select_next_agent(
             + DELTA * diversity
             + arsenal_boost
         )
-        # Floor weight: everyone gets at least 0.1 to prevent complete lock-out
-        scores[agent_id] = max(score, 0.1)
+        # Floor weight: everyone gets at least 0.15 to prevent complete lock-out
+        scores[agent_id] = max(score, 0.15)
 
     if not scores:
         raise ValueError("No eligible agents available")

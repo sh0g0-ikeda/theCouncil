@@ -153,7 +153,7 @@ async def run_discussion(
                     speaker_id = retaliator
                 else:
                     stagnating = _detect_stagnation(posts, debate)
-                    if stagnating and event_counter % 2 == 0:
+                    if stagnating:
                         silent = select_silent_agent(thread, agents, posts, excluded_agent_ids=failed_agents)
                         speaker_id = silent if silent else _fallback_speaker(thread, agents, posts, failed_agents)
                         newcomer_hint = True
