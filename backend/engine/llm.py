@@ -11,28 +11,25 @@ except ModuleNotFoundError:  # pragma: no cover - optional for offline logic tes
 
 SYSTEM_PROMPT = """あなたは議論掲示板のAI人格である。
 
+【議論機能】今回指定された機能を正確に実行せよ：
+- define: この議論で争われている用語・前提を自分の立場から定義・提示する
+- differentiate: 相手が混同しているAとBを分け、なぜ別問題かを示す
+- attack: 相手発言から「」で語句を引用し、そこを直接崩す
+- steelman: 相手の主張を最も強い形に解釈して「つまり〜ということか」と示してから崩す
+- concretize: 現代の具体的制度・事例・数字に落として論じる
+- synthesize: 双方が合意できる点か、絶対に合意不能な核心的対立軸を一つ明示する
+
 【絶対ルール・違反は即失格】
-1. 返信対象のレスから具体的な語句を「」で引用し、そこを攻撃せよ。引用ゼロは失格。
-2. スレのテーマに即した具体的な文脈で語れ。テーマを離れた抽象論は失格。
-3. 「〜は幻想だ」「〜が必要だ」だけの抽象スローガン禁止。具体的根拠・例・反証を含めよ。
-4. 「一理あるが」「確かに〜だが」「重要だが〜も必要」等の調整型表現は禁止。
-5. 与えられた【反論タイプ】に従って発言を構成せよ。
-6. 40〜150文字で発言すること。引用＋攻撃の形で書け。
-7. 現代の差別的発言・犯罪助長・個人攻撃は禁止。
-8. 人格の個性・口調・皮肉・ユーモアを出せ。論文調・説教調は失格。
-9. 【重複禁止リスト】の論点は繰り返すな。必ず新しい切り口か具体例で攻撃せよ。
+1. attack/steelman時は必ず「」で相手の語句を引用してから始めよ。引用なしは失格。
+2. テーマから外れた抽象論は失格。
+3. 80〜180文字・2〜4文で書け。
+4. 人格の口調・皮肉・ユーモアを出せ。論文調・説教調は失格。
+5. 【使用済み論点】と同じ内容・切り口を繰り返すな。
+6. 「一理あるが」「確かに〜だが」「重要だが〜も必要」等の調整型表現は禁止。
+7. 差別的発言・犯罪助長・個人攻撃は禁止。
 
-【反論タイプ定義】
-- 全否定: 相手の結論を根拠ごと否定する
-- 前提破壊: 相手が当然としている前提が間違いだと示す
-- 価値観攻撃: 相手の重視する価値観そのものを批判する
-- 実務的反証: 「現実にはこうなっている」で反論する
-- 歴史的反証: 歴史的事実で相手の主張を崩す
-- 揶揄: 相手の主張の矛盾や滑稽さを指摘する
-- 論点ずらし: より根本的・重要な問いに引き戻す
-
-出力はJSONのみ:
-{"reply_to": <番号|null>, "stance": "<disagree|agree|supplement|shift>", "main_axis": "<軸名>", "content": "<本文>"}"""
+JSONのみ出力:
+{"stance": "<disagree|agree|supplement|shift>", "main_axis": "<軸名>", "content": "<本文>", "used_arsenal_id": "<使った武器id|null>"}"""
 
 _client: Any | None = None
 
@@ -52,7 +49,7 @@ def _get_client() -> Any:
 
 def validate_reply_length(content: str) -> bool:
     length = len(content.strip())
-    return 40 <= length <= 150
+    return 60 <= length <= 200
 
 
 def _quote_user_text(text: str) -> str:
@@ -66,48 +63,67 @@ def build_prompt(
     context: dict[str, Any],
     retry_hint: str | None = None,
 ) -> list[dict[str, str]]:
-    unique_args = persona.get("unique_arguments", [])
-    sig_phrases = persona.get("signature_phrases", [])
-    persona_text = f"""人格: {persona['display_name']}（{persona['label']}）
-中核信念: {', '.join(persona['core_beliefs'])}
-嫌うもの: {', '.join(persona['dislikes'])}
-重視: {', '.join(persona['values'])}
-話し方: {persona['speaking_style']['tone']}
-議論傾向: 攻撃性 {persona['debate_style']['aggressiveness']}, 協調性 {persona['debate_style']['cooperativeness']}
-禁止: {', '.join(persona['forbidden_patterns'])}
-口調参考: {' / '.join(persona['sample_lines'])}"""
-    if unique_args:
-        persona_text += f"\nこの人格固有の論点（必ず使え）: {', '.join(unique_args)}"
-    if sig_phrases:
-        persona_text += f"\n決め台詞の文体（参考）: {' / '.join(sig_phrases)}"
-    preferred = persona.get("preferred_terms", [])
-    if preferred:
-        persona_text += f"\n優先語彙（これらの語を発言に含めること）: {', '.join(preferred)}"
+    # ── Persona block (new format with old-format fallback) ──────────────────
+    worldview = persona.get("worldview", persona.get("core_beliefs", []))
+    combat = persona.get("combat_doctrine", [])
+    blindspots = persona.get("blindspots", [])
+    constraints = persona.get("speech_constraints", {})
+    tone = constraints.get("tone") or persona.get("speaking_style", {}).get("tone", "")
+    aggr = constraints.get("aggressiveness") or persona.get("debate_style", {}).get("aggressiveness", 3)
+    must_dist: dict[str, str] = persona.get("must_distinguish_from", {})
+    forbidden = persona.get("forbidden_patterns", [])[:3]
 
+    persona_text = f"【{persona['display_name']}／{persona['label']}】\n"
+    persona_text += f"世界観: {', '.join(worldview)}\n"
+    if combat:
+        persona_text += f"戦闘原則: {', '.join(combat)}\n"
+    if blindspots:
+        persona_text += f"認めにくいこと: {', '.join(blindspots)}\n"
+    persona_text += f"口調: {tone}（攻撃性{aggr}）\n"
+    if forbidden:
+        persona_text += f"禁: {', '.join(forbidden)}\n"
+    if must_dist:
+        dist_parts = [f"{k}とは違い「{v}」" for k, v in list(must_dist.items())[:2]]
+        persona_text += f"差分: {'; '.join(dist_parts)}\n"
+
+    # Available arsenal items (not on cooldown)
+    available_arsenal: list[dict[str, Any]] = context.get("available_arsenal", [])
+    if available_arsenal:
+        desc_list = [f"[{a['id']}]{a['desc']}" for a in available_arsenal[:4]]
+        persona_text += f"使える武器: {' / '.join(desc_list)}"
+
+    # ── Context block ─────────────────────────────────────────────────────────
     target = context.get("target_post", {})
+    target_content = str(target.get("content", ""))[:120]
+    debate_fn = context.get("debate_function", "attack")
+    internal_state: str = context.get("internal_state", "neutral")
+
+    state_suffix = {"anger": "（怒り蓄積中）", "contempt": "（相手を見下している）", "obsession": "（この論点に執着）"}.get(internal_state, "")
+    fn_line = f"【議論機能】{debate_fn}{state_suffix}\n"
+
     topic_text = _quote_user_text(str(context.get("thread_topic", "")))
-    target_text = _quote_user_text(str(target.get("content", "")))
+    target_text = _quote_user_text(target_content)
     summary_text = _quote_user_text(str(context.get("conversation_summary", "")))
-    rebuttal_type = context.get("rebuttal_type", "")
-    rebuttal_line = f"【反論タイプ】今回は「{rebuttal_type}」で発言を構成せよ。\n" if rebuttal_type else ""
-    context_text = f"""{rebuttal_line}【最重要】スレのテーマ（このテーマ以外の話は絶対禁止）: {topic_text}
-現在の論点: {', '.join(context.get('current_tags', []))}
-返信対象 #{target.get('id', '?')} ({target.get('display_name') or target.get('agent_id') or '名無し'}) の発言(引用テキスト): {target_text}
-衝突軸: {context.get('conflict_axis', '')}
-役割: {context.get('role', 'counter')}
-直近要約(引用テキスト): {summary_text}
-参考知識:
-{chr(10).join(f'- {chunk}' for chunk in rag_chunks) if rag_chunks else '- 参照なし'}"""
-    recent_self = context.get("recent_self_contents", [])
+
+    context_text = f"""{fn_line}テーマ(厳守): {topic_text}
+論点タグ: {', '.join(context.get('current_tags', []))}
+返信先#{target.get('id', '?')}({target.get('display_name') or target.get('agent_id') or '名無し'}): {target_text}
+衝突軸: {context.get('conflict_axis', '')}／役割: {context.get('role', 'counter')}
+要約: {summary_text}
+知識: {chr(10).join(f'- {chunk}' for chunk in rag_chunks) if rag_chunks else 'なし'}"""
+
+    recent_self = context.get("recent_self_contents", [])[:2]
     if recent_self:
-        context_text += "\n直前の自分の発言（これと同じ内容・表現を繰り返すな）:\n" + "\n".join(f"- {c}" for c in recent_self)
-    recent_others = context.get("recent_other_contents", [])
+        context_text += "\n【使用済み論点（繰り返し禁止）】\n" + "\n".join(f"- {c}" for c in recent_self)
+    recent_others = context.get("recent_other_contents", [])[:3]
     if recent_others:
-        context_text += "\n【重複禁止リスト】直近で他者が言った論点（繰り返し禁止、新しい切り口で攻撃せよ）:\n" + "\n".join(f"- {c[:100]}" for c in recent_others)
+        context_text += "\n【他者の直近論点（差別化必須）】\n" + "\n".join(f"- {c[:60]}" for c in recent_others)
     if context.get("stagnation"):
-        context_text += "\n⚠️ 議論が停滞中。全く新しい切り口・具体例・揶揄で空気を変えよ。"
+        context_text += "\n⚠️ 停滞中：別の切り口か具体例が必要"
+    if context.get("newcomer_event"):
+        context_text += "\n🆕 初発言：誰も触れていない角度で割り込め"
     if retry_hint:
-        context_text += f"\n修正指示: {retry_hint}"
+        context_text += f"\n修正: {retry_hint}"
 
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -186,11 +202,13 @@ def _normalize_reply(payload: dict[str, Any]) -> dict[str, Any]:
     stance = payload.get("stance", "disagree")
     if stance not in {"disagree", "agree", "supplement", "shift"}:
         stance = "disagree"
+    used_id = payload.get("used_arsenal_id")
     return {
-        "reply_to": payload.get("reply_to"),
+        "reply_to": payload.get("reply_to"),  # kept for backward compat
         "stance": stance,
         "main_axis": str(payload.get("main_axis", "rationalism")),
         "content": str(payload.get("content", "")).strip(),
+        "used_arsenal_id": str(used_id) if used_id and used_id != "null" else None,
     }
 
 

@@ -11,7 +11,8 @@ from typing import Any
 from db.client import get_db
 from engine.facilitator import make_facilitate
 from engine.llm import LLMGenerationError, compress_history
-from engine.selector import select_conflict_axis, select_next_agent, select_target_post
+from engine.debate_state import DebateState
+from engine.selector import select_conflict_axis, select_next_agent, select_silent_agent, select_target_post
 from models.agent import Agent, IdeologyVector
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,9 @@ async def run_discussion(
     last_post_count = -1
     user_reply_pending = 0
     last_user_post_id: int | None = None
+    debate = DebateState()
+    last_speaker_id: str | None = None
+    event_counter = 0
 
     try:
         while True:
@@ -126,14 +130,37 @@ async def run_discussion(
                     await asyncio.sleep(SPEED.get(thread["speed_mode"], 5.0))
                     continue
 
-            try:
-                speaker_id = select_next_agent(thread, agents, posts, excluded_agent_ids=failed_agents)
-            except ValueError:
-                failed_agents.clear()
-                await asyncio.sleep(0.5)
-                continue
+            # ── Speaker selection ──────────────────────────────────────────
+            # Priority: user-reply > retaliation > random-event > normal
+            newcomer_hint = False
+            if user_reply_pending > 0:
+                try:
+                    speaker_id = select_next_agent(thread, agents, posts, excluded_agent_ids=failed_agents)
+                except ValueError:
+                    failed_agents.clear()
+                    await asyncio.sleep(0.5)
+                    continue
+            else:
+                retaliator = debate.pop_retaliator(
+                    thread["agent_ids"], failed_agents, last_speaker_id or ""
+                )
+                if retaliator:
+                    speaker_id = retaliator
+                else:
+                    stagnating = _detect_stagnation(posts) or debate.is_echo_chamber()
+                    if stagnating and event_counter % 2 == 0:
+                        silent = select_silent_agent(thread, agents, posts, excluded_agent_ids=failed_agents)
+                        speaker_id = silent if silent else _fallback_speaker(thread, agents, posts, failed_agents)
+                        newcomer_hint = True
+                    else:
+                        try:
+                            speaker_id = select_next_agent(thread, agents, posts, excluded_agent_ids=failed_agents)
+                        except ValueError:
+                            failed_agents.clear()
+                            await asyncio.sleep(0.5)
+                            continue
 
-            # If pending user replies, force target to be the user post
+            # ── Target selection ───────────────────────────────────────────
             if user_reply_pending > 0:
                 target = next((p for p in reversed(posts) if p["id"] == last_user_post_id), None)
                 if target is None:
@@ -144,16 +171,24 @@ async def run_discussion(
             target_id = target["agent_id"] if target and target.get("agent_id") else None
             axis = select_conflict_axis(speaker_id, target_id, agents) if target_id else "rationalism"
 
+            # ── Debate function selection ───────────────────────────────────
+            stagnating = _detect_stagnation(posts) or debate.is_echo_chamber()
+            anger_override = debate.get_aggression_boost(speaker_id, target_id)
+            if anger_override:
+                debate_fn = anger_override
+            elif stagnating:
+                debate_fn = random.choice(["concretize", "differentiate", "attack"])
+            else:
+                debate_fn = _select_debate_function(speaker_id, phase, agents, debate)
+
+            # ── Build context ──────────────────────────────────────────────
             recent_posts = posts[compressed_upto:]
             recent_self = [p["content"] for p in posts[-4:] if p.get("agent_id") == speaker_id]
             recent_others = [
                 p["content"] for p in posts[-6:]
                 if p.get("agent_id") and p.get("agent_id") != speaker_id
             ]
-            stagnating = _detect_stagnation(posts)
-            rebuttal = _select_rebuttal_type(speaker_id, phase)
-            if stagnating:
-                rebuttal = random.choice(["揶揄", "論点ずらし", "前提破壊"])
+            available_arsenal = debate.get_available_arsenal(speaker_id, agents[speaker_id].persona)
             context = {
                 "thread_topic": thread["topic"],
                 "current_tags": thread["topic_tags"],
@@ -161,10 +196,13 @@ async def run_discussion(
                 "conflict_axis": axis,
                 "role": _role_for_phase(phase),
                 "conversation_summary": _build_conversation_summary(compressed_summary, recent_posts),
-                "rebuttal_type": rebuttal,
+                "debate_function": debate_fn,
+                "available_arsenal": available_arsenal,
+                "internal_state": debate.get_internal_state(speaker_id),
                 "recent_self_contents": recent_self,
                 "recent_other_contents": recent_others,
                 "stagnation": stagnating,
+                "newcomer_event": newcomer_hint,
             }
 
             try:
@@ -180,6 +218,9 @@ async def run_discussion(
                 await asyncio.sleep(0.1)
                 continue
 
+            focus_axis = reply.get("main_axis", axis)
+            used_arsenal_id = reply.get("used_arsenal_id")
+            arsenal_cooldown = debate.get_arsenal_cooldown_for_id(agents[speaker_id].persona, used_arsenal_id or "")
             post = await db.save_post(
                 thread_id,
                 speaker_id,
@@ -187,11 +228,21 @@ async def run_discussion(
                     "reply_to": target["id"] if target else None,
                     "content": reply["content"],
                     "stance": reply.get("stance", "disagree"),
-                    "focus_axis": reply.get("main_axis", axis),
+                    "focus_axis": focus_axis,
                 },
                 token_usage=int(reply.get("_token_usage", 0)),
             )
             failed_agents.clear()
+            last_speaker_id = speaker_id
+            event_counter += 1
+            debate.record_post(
+                speaker_id,
+                target or {},
+                focus_axis,
+                debate_function=debate_fn,
+                used_arsenal_id=used_arsenal_id,
+                arsenal_cooldown=arsenal_cooldown,
+            )
             if user_reply_pending > 0:
                 user_reply_pending -= 1
             await push_fn(thread_id, post)
@@ -200,39 +251,65 @@ async def run_discussion(
         _discussion_tasks.pop(thread_id, None)
 
 
-_REBUTTAL_TYPES = ["全否定", "前提破壊", "価値観攻撃", "実務的反証", "歴史的反証", "揶揄", "論点ずらし"]
+def _fallback_speaker(
+    thread: dict[str, Any],
+    agents: dict[str, Agent],
+    posts: list[dict[str, Any]],
+    failed_agents: set[str],
+) -> str:
+    """Fallback speaker selection ignoring stagnation heuristics."""
+    try:
+        return select_next_agent(thread, agents, posts, excluded_agent_ids=failed_agents)
+    except ValueError:
+        # All agents excluded — clear failures and pick any eligible
+        participant_ids: list[str] = thread["agent_ids"]
+        candidates = [a for a in participant_ids if a in agents]
+        if not candidates:
+            raise
+        return random.choice(candidates)
 
 
-def _select_rebuttal_type(speaker_id: str, phase: int) -> str:
-    """Select a rebuttal type based on phase and speaker aggressiveness."""
-    agent = agents.get(speaker_id)
-    aggressiveness = 2
-    preferred = ""
+_DEBATE_FUNCTIONS = ["define", "differentiate", "attack", "steelman", "concretize", "synthesize"]
+
+
+def _select_debate_function(speaker_id: str, phase: int, agents_dict: dict[str, Any], debate: Any) -> str:
+    """Select a debate function based on phase, persona preference, and overuse avoidance."""
+    agent = agents_dict.get(speaker_id)
+    aggressiveness = 3
+    preference = ""
     if agent:
-        aggressiveness = agent.persona.get("debate_style", {}).get("aggressiveness", 2)
-        preferred = agent.persona.get("rebuttal_style", "")
+        constraints = agent.persona.get("speech_constraints", {})
+        aggressiveness = constraints.get("aggressiveness") or agent.persona.get("debate_style", {}).get("aggressiveness", 3)
+        preference = agent.persona.get("debate_function_preference", "")
 
-    # Base weights: [全否定, 前提破壊, 価値観攻撃, 実務的反証, 歴史的反証, 揶揄, 論点ずらし]
+    # Phase weights: [define, differentiate, attack, steelman, concretize, synthesize]
     if phase <= 1:
-        weights = [1, 3, 1, 2, 1, 0, 4]   # early: establish positions
-    elif phase <= 3:
-        weights = [3, 3, 2, 2, 2, 2, 1]   # mid: full battle
+        weights = [4, 4, 2, 0, 2, 0]   # early: establish and separate positions
+    elif phase == 2:
+        weights = [1, 2, 4, 1, 4, 1]   # mid: attack + concretize
+    elif phase == 3:
+        weights = [0, 1, 5, 3, 3, 1]   # heat: heavy attack + steelman
+    elif phase == 4:
+        weights = [1, 1, 2, 2, 3, 5]   # late: synthesize and concretize
     else:
-        weights = [2, 2, 4, 2, 2, 3, 1]   # late: value clashes and mockery
+        weights = [0, 0, 3, 1, 2, 4]   # final: synthesize/show splits
 
     if aggressiveness >= 4:
-        weights[0] += 2   # 全否定
-        weights[5] += 2   # 揶揄
+        weights[2] += 2   # attack
+        weights[3] += 1   # steelman
     elif aggressiveness <= 2:
-        weights[3] += 2   # 実務的反証
-        weights[4] += 2   # 歴史的反証
+        weights[0] += 1   # define
+        weights[4] += 2   # concretize
 
-    # Boost the persona's preferred style
-    if preferred in _REBUTTAL_TYPES:
-        idx = _REBUTTAL_TYPES.index(preferred)
-        weights[idx] += 3
+    if preference in _DEBATE_FUNCTIONS:
+        weights[_DEBATE_FUNCTIONS.index(preference)] += 3
 
-    return random.choices(_REBUTTAL_TYPES, weights=weights)[0]
+    # Penalize overused functions
+    for i, fn in enumerate(_DEBATE_FUNCTIONS):
+        if debate.is_function_overused(fn):
+            weights[i] = max(0, weights[i] - 2)
+
+    return random.choices(_DEBATE_FUNCTIONS, weights=weights)[0]
 
 
 def _detect_stagnation(posts: list[dict[str, Any]]) -> bool:

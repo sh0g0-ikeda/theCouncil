@@ -26,6 +26,24 @@ def _eligible_participants(participant_ids: list[str], excluded_agent_ids: set[s
     return [agent_id for agent_id in participant_ids if agent_id not in excluded_agent_ids]
 
 
+def select_silent_agent(
+    thread: dict[str, Any],
+    agents: dict[str, Any],
+    posts: list[dict[str, Any]],
+    excluded_agent_ids: set[str] | None = None,
+) -> str | None:
+    """Return the participant who has spoken least (for newcomer events)."""
+    participant_ids: list[str] = thread["agent_ids"]
+    excluded = (excluded_agent_ids or set()) | {
+        p["agent_id"] for p in posts[-2:] if p.get("agent_id")
+    }
+    post_counts = {a: sum(1 for p in posts if p.get("agent_id") == a) for a in participant_ids}
+    candidates = [(a, post_counts.get(a, 0)) for a in participant_ids if a not in excluded and a in agents]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda x: x[1])[0]
+
+
 def select_next_agent(
     thread: dict[str, Any],
     agents: dict[str, Any],
