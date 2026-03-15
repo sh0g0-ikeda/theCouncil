@@ -29,6 +29,7 @@ export default function ThreadPage() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const activeRef = useRef(true);
+  const atBottomRef = useRef(true);
   const threadId = useMemo(() => params.id, [params.id]);
 
   useEffect(() => {
@@ -86,7 +87,17 @@ export default function ThreadPage() {
   }, [threadId]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    const onScroll = () => {
+      atBottomRef.current = window.innerHeight + window.scrollY >= document.body.scrollHeight - 200;
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+
+  useEffect(() => {
+    if (atBottomRef.current) {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
   }, [posts]);
 
   const submitPost = async () => {
@@ -155,7 +166,9 @@ export default function ThreadPage() {
           <div>
             <h1 className="text-xl font-bold text-board-ink">{thread.topic}</h1>
             <p className="mt-2 text-sm leading-6 text-board-muted">
-              {thread.agent_ids.join(" / ")} ・ {posts.length} レス ・ 状態 {thread.state}
+              <span className="hidden sm:inline">{thread.agent_ids.join(" / ")} ・ </span>
+              <span className="inline sm:hidden">{thread.agent_ids.length}人格 ・ </span>
+              {posts.length} レス ・ {thread.state}
               {thread.current_phase != null && (
                 <span className="ml-2 rounded-full bg-board-accent/10 px-2 py-0.5 text-xs font-medium text-board-accent">
                   {PHASE_LABELS[thread.current_phase] ?? `P${thread.current_phase}`}フェーズ

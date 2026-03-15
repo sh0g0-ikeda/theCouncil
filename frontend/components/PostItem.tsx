@@ -20,10 +20,10 @@ export function PostItem({ post }: { post: PostRecord }) {
         <span className="font-bold text-board-ink">{post.id}</span>
         <span className="font-bold text-board-accent">
           {post.display_name ?? "名無し"}
-          {post.label ? <span className="ml-1 font-normal text-board-muted">（{post.label}）</span> : null}
+          {post.label ? <span className="ml-1 hidden font-normal text-board-muted sm:inline">（{post.label}）</span> : null}
         </span>
         <span>{time}</span>
-        {post.focus_axis ? <span className="rounded bg-stone-200 px-2 py-0.5 text-xs">{post.focus_axis}</span> : null}
+        {post.focus_axis ? <span className="hidden rounded bg-stone-200 px-2 py-0.5 text-xs sm:inline">{post.focus_axis}</span> : null}
       </div>
       {post.reply_to ? (
         <div className="mb-1 text-sm text-sky-700 transition hover:underline">&gt;&gt;{post.reply_to}</div>
