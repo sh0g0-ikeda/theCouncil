@@ -40,6 +40,8 @@ class DebateState:
         self.agreement_streak: dict[str, int] = {}
         # Axis depth: axis -> "introduced"|"contested"|"rebutted"|"synthesized"
         self.axis_depth: dict[str, str] = {}
+        # Per-axis attack count (increments only on "attack" function, not steelman)
+        self.axis_attack_count: dict[str, int] = {}
         # Facilitator active constraint: declared "next N posts must X"
         self.active_constraint: str = ""
         self.constraint_turns: int = 0
@@ -289,11 +291,19 @@ class DebateState:
         current = self.axis_depth.get(axis, "introduced")
         if current == "synthesized":
             return
-        if debate_fn in {"attack", "steelman"}:
+        if debate_fn == "attack":
             if current == "introduced":
                 self.axis_depth[axis] = "contested"
             elif current == "contested":
-                self.axis_depth[axis] = "rebutted"
+                # Require 2+ distinct attacks to mark as genuinely rebutted
+                cnt = self.axis_attack_count.get(axis, 0) + 1
+                self.axis_attack_count[axis] = cnt
+                if cnt >= 2:
+                    self.axis_depth[axis] = "rebutted"
+        elif debate_fn == "steelman":
+            # steelman contributes to "contested" depth only — not to "rebutted"
+            if current == "introduced":
+                self.axis_depth[axis] = "contested"
         elif debate_fn == "synthesize" and current in {"contested", "rebutted"}:
             self.axis_depth[axis] = "synthesized"
 
@@ -340,6 +350,7 @@ class DebateState:
             "open_attacks": [list(t) for t in self.open_attacks],
             "agreement_streak": self.agreement_streak,
             "axis_depth": self.axis_depth,
+            "axis_attack_count": self.axis_attack_count,
             "active_constraint": self.active_constraint,
             "constraint_turns": self.constraint_turns,
         }
@@ -388,6 +399,7 @@ class DebateState:
         ]
         instance.agreement_streak = {k: int(v) for k, v in data.get("agreement_streak", {}).items()}
         instance.axis_depth = {str(k): str(v) for k, v in data.get("axis_depth", {}).items()}
+        instance.axis_attack_count = {str(k): int(v) for k, v in data.get("axis_attack_count", {}).items()}
         instance.active_constraint = str(data.get("active_constraint", ""))
         instance.constraint_turns = int(data.get("constraint_turns", 0))
         return instance

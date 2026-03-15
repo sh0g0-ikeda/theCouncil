@@ -76,6 +76,7 @@ async def make_facilitate(
     thread: dict[str, Any],
     posts: list[dict[str, Any]],
     agent_display_names: dict[str, str] | None = None,
+    debate: Any = None,
 ) -> dict[str, Any] | None:
     """Returns facilitate payload, with optional axis_assignments list for rerail."""
     if not posts:
@@ -87,7 +88,7 @@ async def make_facilitate(
         "rationalism",
     )
 
-    fn_key = _select_facilitator_function(posts)
+    fn_key = _select_facilitator_function(posts, debate)
     fn_instruction = _FACILITATOR_FUNCTIONS[fn_key]
 
     if not os.getenv("OPENAI_API_KEY"):
@@ -159,9 +160,15 @@ async def make_facilitate(
     }
 
 
-def _select_facilitator_function(posts: list[dict[str, Any]]) -> str:
+def _select_facilitator_function(posts: list[dict[str, Any]], debate: Any = None) -> str:
     """Choose facilitator function based on what the debate currently lacks."""
     ai_posts = [p for p in posts if p.get("agent_id")]
+
+    # Whether any axis has been genuinely contested (guards force_tradeoff)
+    has_contested = (
+        debate is not None
+        and any(v in {"contested", "rebutted"} for v in debate.axis_depth.values())
+    )
 
     # Very early (≤3 posts): force definitional intervention to anchor key terms
     if len(posts) <= 3:
@@ -180,12 +187,18 @@ def _select_facilitator_function(posts: list[dict[str, Any]]) -> str:
     if len(set(recent_axes)) <= 2 and len(recent_axes) >= 6:
         return random.choice(["rerail", "concretize", "expose_split"])
 
-    # Parallel monologues (few direct replies): force tradeoff or refocus
+    # Parallel monologues (few direct replies): refocus always, force_tradeoff only if contested
     recent_replies = [p.get("reply_to") for p in ai_posts[-5:] if p.get("reply_to")]
     if len(ai_posts) >= 5 and len(recent_replies) < 2:
-        return random.choice(["force_tradeoff", "refocus"])
+        if has_contested:
+            return random.choice(["force_tradeoff", "refocus"])
+        return "refocus"
 
     if len(ai_posts) >= 20:
-        return random.choice(["expose_split", "force_tradeoff", "concretize"])
+        # force_tradeoff only after genuine contestation
+        options = ["expose_split", "concretize"]
+        if has_contested:
+            options.append("force_tradeoff")
+        return random.choice(options)
 
     return random.choice(["define", "differentiate", "concretize", "expose_split"])

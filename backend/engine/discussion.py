@@ -60,6 +60,7 @@ def _run_director(
     thread: dict[str, Any],
     debate: "DebateState",
     agents_dict: dict[str, Any],
+    posts: list[dict[str, Any]] | None = None,
 ) -> None:
     """Assign structured MISSION directives per agent (no LLM, rule-based).
 
@@ -67,10 +68,12 @@ def _run_director(
       1. rebut_core_claim  — unanswered attack against this agent
       2. defend_self_consistency — agreement streak >= 2 (restore non_negotiable)
       3. echo_break        — echo chamber: force a different axis
-      4. introduce_new_axis — uncovered topic axes
-      5. use_weapon        — unused arsenal items
+      4. deepen_shallow_axis — contest introduced-but-unrebutted axes (with specific claim)
+      5. introduce_new_axis — only when no shallow axes exist
+      6. use_weapon        — unused arsenal items
     """
     participant_ids: list[str] = thread.get("agent_ids", [])
+    recent_posts: list[dict[str, Any]] = posts or []
     uncovered_axes = debate.get_uncovered_axes()
 
     for agent_id in participant_ids:
@@ -126,10 +129,24 @@ def _run_director(
                 None,
             )
             if agent_id != introducer:
+                # Find the most recent specific claim about this axis (for targeted rebuttal)
+                claim_post = next(
+                    (
+                        p for p in reversed(recent_posts[-20:])
+                        if p.get("focus_axis") == axis_to_contest
+                        and p.get("agent_id")
+                        and p.get("agent_id") != agent_id
+                    ),
+                    None,
+                )
+                claim_hint = ""
+                if claim_post:
+                    who = claim_post.get("display_name") or claim_post.get("agent_id") or "相手"
+                    claim_hint = f"特に{who}の「{claim_post['content'][:45]}」を標的にせよ。"
                 debate.push_directive(
                     agent_id,
-                    f"MISSION:deepen_axis｜「{axis_to_contest}」が誰にも反論されていない。"
-                    f"この軸の主張の根幹前提を1つだけ特定し、その前提の弱点を一点で崩せ。",
+                    f"MISSION:deepen_axis｜「{axis_to_contest}」軸がまだ真に反論されていない。"
+                    f"{claim_hint}この主張の根幹前提を1つだけ特定し、その前提の弱点を一点で崩せ。",
                 )
                 continue
 
@@ -300,14 +317,14 @@ async def run_discussion(
 
             # ── Silent director (rule-based, event-driven, no visible post) ──
             if _needs_director(posts, debate):
-                _run_director(thread, debate, agents)
+                _run_director(thread, debate, agents, posts)
 
             if _should_facilitate(posts):
                 agent_display_names = {
                     aid: agents[aid].display_name
                     for aid in thread["agent_ids"] if aid in agents
                 }
-                facilitate = await make_facilitate(thread, posts, agent_display_names)
+                facilitate = await make_facilitate(thread, posts, agent_display_names, debate)
                 if facilitate and facilitate.get("content"):
                     # Store axis assignments from rerail into DebateState
                     ax_assignments = facilitate.get("axis_assignments", [])
