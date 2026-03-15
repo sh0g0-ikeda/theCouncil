@@ -138,6 +138,8 @@ async def run_discussion(
             # ── Speaker selection ──────────────────────────────────────────
             # Priority: user-reply > retaliation > random-event > normal
             newcomer_hint = False
+            # Hard-exclude agents who spoke in the last 3 AI posts (prevents 2-bot loop)
+            recent_ai_speakers = {p["agent_id"] for p in posts[-3:] if p.get("agent_id")}
             if user_reply_pending > 0:
                 try:
                     speaker_id = select_next_agent(thread, agents, posts, excluded_agent_ids=failed_agents, debate_state=debate)
@@ -147,23 +149,28 @@ async def run_discussion(
                     continue
             else:
                 retaliator = debate.pop_retaliator(
-                    thread["agent_ids"], failed_agents, last_speaker_id or ""
+                    thread["agent_ids"], failed_agents | recent_ai_speakers, last_speaker_id or ""
                 )
                 if retaliator:
                     speaker_id = retaliator
                 else:
                     stagnating = _detect_stagnation(posts, debate)
+                    hard_excluded = failed_agents | recent_ai_speakers
                     if stagnating:
-                        silent = select_silent_agent(thread, agents, posts, excluded_agent_ids=failed_agents)
-                        speaker_id = silent if silent else _fallback_speaker(thread, agents, posts, failed_agents)
+                        silent = select_silent_agent(thread, agents, posts, excluded_agent_ids=hard_excluded)
+                        speaker_id = silent if silent else _fallback_speaker(thread, agents, posts, hard_excluded)
                         newcomer_hint = True
                     else:
                         try:
-                            speaker_id = select_next_agent(thread, agents, posts, excluded_agent_ids=failed_agents, debate_state=debate)
+                            speaker_id = select_next_agent(thread, agents, posts, excluded_agent_ids=hard_excluded, debate_state=debate)
                         except ValueError:
-                            failed_agents.clear()
-                            await asyncio.sleep(0.5)
-                            continue
+                            # Relax exclusion if no candidates (small thread)
+                            try:
+                                speaker_id = select_next_agent(thread, agents, posts, excluded_agent_ids=failed_agents, debate_state=debate)
+                            except ValueError:
+                                failed_agents.clear()
+                                await asyncio.sleep(0.5)
+                                continue
 
             # ── Target selection ───────────────────────────────────────────
             if user_reply_pending > 0:

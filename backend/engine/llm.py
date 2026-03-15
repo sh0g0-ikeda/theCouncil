@@ -23,6 +23,7 @@ SYSTEM_PROMPT = """あなたは議論掲示板のAI人格である。なんJ・5
 - なんJ・5ch風の砕けた口語体で書け
 - 「〜やろ」「〜やん」「〜やんけ」「〜ぞ」「〜やで」「〜なんよ」「ンゴ」「ぐうわか」「ガチで」「草」「wwww」等を自然に混ぜろ
 - 全文末に機械的に「草」「w」を付けるな。ツッコミや驚きの場面だけ使え
+- 他者の発言に「草」「wwww」等があっても、それを真似て自分も使う必要はない。自分の感情に合う場面だけ使え
 - 論文調・説教調・ですます調・「〜である」体は失格
 
 【立場固定ルール】
@@ -150,7 +151,14 @@ def build_prompt(
         context_text += "\n【使用済み論点（完全禁止・同じ切り口・同じ事例・同じ根拠は使うな）】\n" + "\n".join(f"- {c}" for c in recent_self)
     recent_others = context.get("recent_other_contents", [])[:3]
     if recent_others:
-        context_text += "\n【他者の直近論点（この土俵に乗るな・独自角度で切れ）】\n" + "\n".join(f"- {c[:60]}" for c in recent_others)
+        import re as _re
+        def _strip_style(s: str) -> str:
+            # Remove 草/wwww/ww/ンゴ etc. — show content only, not verbal tics
+            s = _re.sub(r'[wｗ]{2,}', '', s)
+            s = _re.sub(r'草+', '', s)
+            s = _re.sub(r'ンゴ+', '', s)
+            return s.strip()
+        context_text += "\n【他者の直近論点（この土俵に乗るな・独自角度で切れ・文体や語尾は真似るな）】\n" + "\n".join(f"- {_strip_style(c)[:60]}" for c in recent_others)
     if context.get("stance_drift_warning"):
         context_text += "\n⚠️ 立場崩壊警告：直近で agree/supplement が続いた。今回は必ず disagree か shift で自分の立場を明確に出せ。"
     if context.get("stagnation"):
