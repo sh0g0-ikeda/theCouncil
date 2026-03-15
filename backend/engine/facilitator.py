@@ -20,12 +20,22 @@ def _get_client() -> Any:
         _client = AsyncOpenAI()
     return _client
 
-FACILITATOR_SYSTEM_PROMPT = """あなたは議論のファシリテーターである。
-- 争点を1つに絞って整理する
+FACILITATOR_SYSTEM_PROMPT = """あなたは議論のファシリテーターである。役割は「要約」ではなく「次の争点を設計すること」。
+
+ルール:
+- 今の対立がどこでズレているかを一言で断言する
+- 次に掘り下げるべき問いか切り口を1つ鋭く投げかける
+- 「まとめ」「どちらも大切」「バランスが必要」等の調整発言は禁止
+- 対話の熱を上げる煽り型でよい（ただし中立の立場から）
 - 120〜180文字
-- 誰かを裁定しない
 - JSONのみで返す
-{"content":"...", "stance":"facilitate", "main_axis":"..."}"""
+{"content":"...", "stance":"facilitate", "main_axis":"..."}
+
+例の切り口:
+- 「この議論は〜の問いにまで遡らないと解けない」
+- 「〜と〜は対立しているように見えるが、実は〜という前提で一致している。そこを突け」
+- 「〜はまだ誰も答えていない。次はそこを」
+- 「問題の核心は〜ではなく〜だ。論点を移せ」"""
 
 
 async def make_facilitate(thread: dict[str, Any], posts: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -38,12 +48,8 @@ async def make_facilitate(thread: dict[str, Any], posts: list[dict[str, Any]]) -
         "rationalism",
     )
     if not os.getenv("OPENAI_API_KEY"):
-        summary_bits = " / ".join(
-            f"{post.get('display_name') or post.get('agent_id') or '参加者'}: {post['content'][:28]}"
-            for post in latest[-3:]
-        )
         return {
-            "content": f"ここまでの対立は「{fallback_axis}」に集約できる。{summary_bits} を踏まえ、次は理想論ではなく、実装条件と副作用を同じ尺度で比べてほしい。",
+            "content": f"「{fallback_axis}」の対立が続いているが、問うべきは誰がその仕組みを所有・設計するかだ。制度の善悪より先に、その設計者は誰で、誰の利益を反映するかを答えよ。",
             "stance": "facilitate",
             "main_axis": fallback_axis,
             "_token_usage": 0,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import random
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -151,6 +152,7 @@ async def run_discussion(
                 "conflict_axis": axis,
                 "role": _role_for_phase(phase),
                 "conversation_summary": _build_conversation_summary(compressed_summary, recent_posts),
+                "rebuttal_type": _select_rebuttal_type(speaker_id, phase),
             }
 
             try:
@@ -186,6 +188,41 @@ async def run_discussion(
         _discussion_tasks.pop(thread_id, None)
 
 
+_REBUTTAL_TYPES = ["全否定", "前提破壊", "価値観攻撃", "実務的反証", "歴史的反証", "揶揄", "論点ずらし"]
+
+
+def _select_rebuttal_type(speaker_id: str, phase: int) -> str:
+    """Select a rebuttal type based on phase and speaker aggressiveness."""
+    agent = agents.get(speaker_id)
+    aggressiveness = 2
+    preferred = ""
+    if agent:
+        aggressiveness = agent.persona.get("debate_style", {}).get("aggressiveness", 2)
+        preferred = agent.persona.get("rebuttal_style", "")
+
+    # Base weights: [全否定, 前提破壊, 価値観攻撃, 実務的反証, 歴史的反証, 揶揄, 論点ずらし]
+    if phase <= 1:
+        weights = [1, 3, 1, 2, 1, 0, 4]   # early: establish positions
+    elif phase <= 3:
+        weights = [3, 3, 2, 2, 2, 2, 1]   # mid: full battle
+    else:
+        weights = [2, 2, 4, 2, 2, 3, 1]   # late: value clashes and mockery
+
+    if aggressiveness >= 4:
+        weights[0] += 2   # 全否定
+        weights[5] += 2   # 揶揄
+    elif aggressiveness <= 2:
+        weights[3] += 2   # 実務的反証
+        weights[4] += 2   # 歴史的反証
+
+    # Boost the persona's preferred style
+    if preferred in _REBUTTAL_TYPES:
+        idx = _REBUTTAL_TYPES.index(preferred)
+        weights[idx] += 3
+
+    return random.choices(_REBUTTAL_TYPES, weights=weights)[0]
+
+
 def _get_phase(post_count: int) -> int:
     if post_count < 8:
         return 1
@@ -199,7 +236,7 @@ def _get_phase(post_count: int) -> int:
 
 
 def _role_for_phase(phase: int) -> str:
-    return {1: "supplement", 2: "counter", 3: "counter", 4: "shift", 5: "supplement"}[phase]
+    return {1: "counter", 2: "counter", 3: "counter", 4: "shift", 5: "counter"}[phase]
 
 
 def _build_conversation_summary(compressed_summary: str, recent_posts: list[dict[str, Any]]) -> str:

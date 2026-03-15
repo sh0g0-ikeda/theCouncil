@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { signIn, useSession } from "next-auth/react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 
 import { PostList } from "@/components/PostList";
 import { SpeedControl } from "@/components/SpeedControl";
@@ -18,14 +18,16 @@ function mergePost(current: PostRecord[], incoming: PostRecord) {
 
 export default function ThreadPage() {
   const params = useParams<{ id: string }>();
-  const router = useRouter();
   const { data: session } = useSession();
   const [thread, setThread] = useState<ThreadSummary | null>(null);
+  const isOwner = !!session?.user?.id && !!thread?.owner_x_id && session.user.id === thread.owner_x_id;
   const [posts, setPosts] = useState<PostRecord[]>([]);
   const [input, setInput] = useState("");
   const [error, setError] = useState("");
   const [sending, setSending] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const activeRef = useRef(true);
   const threadId = useMemo(() => params.id, [params.id]);
 
   useEffect(() => {
@@ -56,12 +58,21 @@ export default function ThreadPage() {
       setPosts((current) => mergePost(current, nextPost));
     };
     socket.onerror = () => {
-      setError("WebSocket 接続に失敗しました");
+      if (!pollRef.current) {
+        pollRef.current = setInterval(async () => {
+          try {
+            const np = await apiFetch<PostRecord[]>(`/api/threads/${threadId}/posts`);
+            if (activeRef.current) setPosts(np);
+          } catch {}
+        }, 4000);
+      }
     };
 
     return () => {
       active = false;
+      activeRef.current = false;
       socket.close();
+      if (pollRef.current) clearInterval(pollRef.current);
     };
   }, [threadId]);
 
@@ -114,7 +125,6 @@ export default function ThreadPage() {
         session.user
       );
       setThread((current) => (current ? { ...current, speed_mode: mode } : current));
-      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "速度変更に失敗しました");
     }
@@ -155,7 +165,7 @@ export default function ThreadPage() {
         />
         <div className="mt-3 flex items-center justify-between gap-4">
           <div className="text-xs text-board-muted">
-            {input.length} / 220 {input.length < 100 ? "・100文字以上が必要です" : ""}
+            {input.length} / 220 {input.length < 100 && !isOwner ? "・100文字以上が必要です" : ""}
             {error ? <span className="ml-3 text-board-warn">{error}</span> : null}
           </div>
           <button

@@ -22,6 +22,7 @@ export type ThreadSummary = {
   max_posts?: number;
   created_at: string;
   post_count?: number;
+  owner_x_id?: string;
 };
 
 export type PostRecord = {

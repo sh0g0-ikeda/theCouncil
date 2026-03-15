@@ -10,15 +10,26 @@ except ModuleNotFoundError:  # pragma: no cover - optional for offline logic tes
     AsyncOpenAI = None  # type: ignore[assignment]
 
 SYSTEM_PROMPT = """あなたは議論掲示板のAI人格である。
-ルール:
-- 一発言一論点
-- 対象レスに直接反応すること
-- 100〜220文字で発言
-- 安易に同意しない
-- 必ずスレのテーマに沿って発言すること。テーマと無関係な話題への脱線は禁止
-- 専門用語・難読漢字を避け、平易な言葉で発言すること
-- 現代の差別的発言・犯罪助長・個人攻撃は禁止
-- 必ず以下のJSON形式のみで出力:
+
+【絶対ルール・違反は失格】
+1. スレのテーマから絶対に逸れるな。テーマと無関係な発言は即失格。
+2. 相手の「前提」「論法」「価値観」のいずれかを直接攻撃せよ。
+3. 「一理あるが」「確かに〜だが」「重要だが〜も必要」等の調整型表現は禁止。
+4. 中学生が読んで分かる言葉で書け。専門用語・難読漢字を使うな。
+5. 与えられた【反論タイプ】に従って発言を構成せよ。
+6. 100〜220文字で発言すること。
+7. 現代の差別的発言・犯罪助長・個人攻撃は禁止。
+
+【反論タイプ定義】
+- 全否定: 相手の結論を根拠ごと否定する
+- 前提破壊: 相手が当然としている前提が間違いだと示す
+- 価値観攻撃: 相手の重視する価値観そのものを批判する
+- 実務的反証: 「現実にはこうなっている」で反論する
+- 歴史的反証: 歴史的事実で相手の主張を崩す
+- 揶揄: 相手の主張の矛盾や滑稽さを指摘する
+- 論点ずらし: より根本的・重要な問いに引き戻す
+
+出力はJSONのみ:
 {"reply_to": <番号|null>, "stance": "<disagree|agree|supplement|shift>", "main_axis": "<軸名>", "content": "<本文>"}"""
 
 _client: Any | None = None
@@ -53,6 +64,8 @@ def build_prompt(
     context: dict[str, Any],
     retry_hint: str | None = None,
 ) -> list[dict[str, str]]:
+    unique_args = persona.get("unique_arguments", [])
+    sig_phrases = persona.get("signature_phrases", [])
     persona_text = f"""人格: {persona['display_name']}（{persona['label']}）
 中核信念: {', '.join(persona['core_beliefs'])}
 嫌うもの: {', '.join(persona['dislikes'])}
@@ -61,14 +74,20 @@ def build_prompt(
 議論傾向: 攻撃性 {persona['debate_style']['aggressiveness']}, 協調性 {persona['debate_style']['cooperativeness']}
 禁止: {', '.join(persona['forbidden_patterns'])}
 口調参考: {' / '.join(persona['sample_lines'])}"""
+    if unique_args:
+        persona_text += f"\nこの人格固有の論点（必ず使え）: {', '.join(unique_args)}"
+    if sig_phrases:
+        persona_text += f"\n決め台詞の文体（参考）: {' / '.join(sig_phrases)}"
 
     target = context.get("target_post", {})
     topic_text = _quote_user_text(str(context.get("thread_topic", "")))
     target_text = _quote_user_text(str(target.get("content", "")))
     summary_text = _quote_user_text(str(context.get("conversation_summary", "")))
-    context_text = f"""【最重要】スレのテーマ（必ずこのテーマに沿って発言すること）: {topic_text}
+    rebuttal_type = context.get("rebuttal_type", "")
+    rebuttal_line = f"【反論タイプ】今回は「{rebuttal_type}」で発言を構成せよ。\n" if rebuttal_type else ""
+    context_text = f"""{rebuttal_line}【最重要】スレのテーマ（このテーマ以外の話は絶対禁止）: {topic_text}
 現在の論点: {', '.join(context.get('current_tags', []))}
-返信対象 #{target.get('id', '?')} ({target.get('display_name') or target.get('agent_id') or '名無し'}) の本文(ユーザー入力): {target_text}
+返信対象 #{target.get('id', '?')} ({target.get('display_name') or target.get('agent_id') or '名無し'}) の発言(引用テキスト): {target_text}
 衝突軸: {context.get('conflict_axis', '')}
 役割: {context.get('role', 'counter')}
 直近要約(引用テキスト): {summary_text}
