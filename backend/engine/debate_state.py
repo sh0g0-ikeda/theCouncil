@@ -24,6 +24,10 @@ class DebateState:
         self.stance_history: dict[str, list[str]] = {}
         # Per-agent set of used arsenal IDs (ever used, for novelty boost)
         self.used_arsenal_ids: dict[str, set[str]] = {}
+        # Debate role assignment: agent_id -> "pro" | "con" | "neutral"
+        self.debate_roles: dict[str, str] = {}
+        # Facilitator-assigned forced axis queue: [(agent_id, axis), ...]
+        self.forced_axis_queue: list[tuple[str, str]] = []
 
     def record_post(
         self,
@@ -166,6 +170,33 @@ class DebateState:
             return False
         return len(set(self.recent_axes[-5:])) == 1
 
+    # ── Role assignment ──────────────────────────────────────────────────────
+
+    def set_debate_roles(self, roles: dict[str, str]) -> None:
+        self.debate_roles = roles
+
+    def get_debate_role(self, agent_id: str) -> str:
+        return self.debate_roles.get(agent_id, "")
+
+    def roles_initialized(self) -> bool:
+        return bool(self.debate_roles)
+
+    # ── Forced axis queue (set by facilitator rerail) ────────────────────────
+
+    def push_axis_assignments(self, assignments: list[tuple[str, str]]) -> None:
+        """Queue [(agent_id, axis), ...] from facilitator rerail."""
+        self.forced_axis_queue.extend(assignments)
+        if len(self.forced_axis_queue) > 10:
+            self.forced_axis_queue = self.forced_axis_queue[-10:]
+
+    def pop_forced_axis(self, agent_id: str) -> str | None:
+        """Return and remove the next forced axis for this agent, if any."""
+        for i, (aid, axis) in enumerate(self.forced_axis_queue):
+            if aid == agent_id:
+                self.forced_axis_queue.pop(i)
+                return axis
+        return None
+
     def to_dict(self) -> dict:
         return {
             "anger": {f"{k[0]}\x00{k[1]}": v for k, v in self.anger.items()},
@@ -176,6 +207,8 @@ class DebateState:
             "recent_functions": self.recent_functions,
             "stance_history": self.stance_history,
             "used_arsenal_ids": {k: list(v) for k, v in self.used_arsenal_ids.items()},
+            "debate_roles": self.debate_roles,
+            "forced_axis_queue": self.forced_axis_queue,
         }
 
     @classmethod
@@ -197,4 +230,9 @@ class DebateState:
         instance.used_arsenal_ids = {
             k: set(v) for k, v in data.get("used_arsenal_ids", {}).items()
         }
+        instance.debate_roles = data.get("debate_roles", {})
+        instance.forced_axis_queue = [
+            (item[0], item[1]) for item in data.get("forced_axis_queue", [])
+            if isinstance(item, (list, tuple)) and len(item) == 2
+        ]
         return instance

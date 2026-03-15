@@ -106,6 +106,15 @@ def build_prompt(
     persona_text += f"口調: {tone}（攻撃性{aggr}）\n"
     if non_negotiable:
         persona_text += f"【絶対に譲れない立場】{non_negotiable}\n"
+
+    # Debate role (pro/con/neutral) — assigned at thread start, must not collapse
+    debate_role = context.get("debate_role", "")
+    if debate_role == "pro":
+        persona_text += "【配役：擁護側】このテーマに対して擁護・肯定の立場で発言せよ。反対側の意見に押し流されても絶対に立場を変えるな。\n"
+    elif debate_role == "con":
+        persona_text += "【配役：批判側】このテーマに対して批判・否定の立場で発言せよ。擁護側の意見に押し流されても絶対に立場を変えるな。\n"
+    elif debate_role == "neutral":
+        persona_text += "【配役：整理役】賛否いずれにも肩入れせず、論点の再定義・対立軸の明示・評価基準の整理をせよ。\n"
     if forbidden:
         persona_text += f"禁: {', '.join(forbidden)}\n"
     if must_dist:
@@ -166,6 +175,9 @@ def build_prompt(
         context_text += "\n🔰 初投稿：冒頭でテーマへの自分の答えを一言で断言せよ（例：「〜が最も優れた政体や」「〜こそ正解や」）。抽象論から入るな。"
     if context.get("newcomer_event"):
         context_text += "\n🆕 新規割込み：誰も触れていない角度で入れ"
+    forced_axis = context.get("forced_axis", "")
+    if forced_axis:
+        context_text += f"\n🎯 【ファシリ指定軸】今回は「{forced_axis}」の観点だけで論じよ。他の軸に逸れるな。"
     if retry_hint:
         context_text += f"\n修正: {retry_hint}"
 
@@ -285,3 +297,61 @@ async def call_llm(messages: list[dict[str, str]]) -> dict[str, Any]:
     reply = _normalize_reply(payload)
     reply["_token_usage"] = int(getattr(response.usage, "total_tokens", 0) or 0)
     return reply
+
+
+async def assign_debate_roles(
+    topic: str,
+    agent_list: list[dict[str, Any]],
+) -> dict[str, str]:
+    """Assign pro/con/neutral debate roles based on topic + persona.
+
+    Returns {agent_id: "pro"|"con"|"neutral"}.
+    Guarantees pro and con counts differ by at most 1.
+    """
+    if not os.getenv("OPENAI_API_KEY") or not agent_list:
+        # Fallback: deterministic split
+        roles: dict[str, str] = {}
+        for i, agent in enumerate(agent_list):
+            roles[agent["id"]] = ["pro", "con", "neutral"][i % 3]
+        return roles
+
+    lines = []
+    for agent in agent_list:
+        wv = ", ".join(agent.get("worldview", [])[:2])
+        nn = agent.get("speech_constraints", {}).get("non_negotiable", "")[:60]
+        lines.append(f'{agent["id"]}({agent["display_name"]}): 世界観={wv}. 譲れない={nn}')
+
+    try:
+        response = await _get_client().chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "議題に対して各エージェントを「pro」「con」「neutral」に分類し、JSONのみ返せ。"
+                        "proとconの人数差は1以下にせよ。neutralは最大1名。"
+                        '形式: {"roles": {"agent_id": "pro", ...}}'
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"議題: {topic}\n\nエージェント:\n" + "\n".join(lines),
+                },
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=200,
+            temperature=0.3,
+        )
+        payload = json.loads(response.choices[0].message.content or "{}")
+        roles = {k: str(v) for k, v in payload.get("roles", {}).items()
+                 if v in {"pro", "con", "neutral"}}
+        # Fill in any missing agents with fallback
+        for i, agent in enumerate(agent_list):
+            if agent["id"] not in roles:
+                roles[agent["id"]] = ["pro", "con", "neutral"][i % 3]
+        return roles
+    except Exception:
+        roles = {}
+        for i, agent in enumerate(agent_list):
+            roles[agent["id"]] = ["pro", "con", "neutral"][i % 3]
+        return roles

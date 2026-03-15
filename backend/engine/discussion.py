@@ -10,7 +10,7 @@ from typing import Any
 
 from db.client import get_db
 from engine.facilitator import make_facilitate
-from engine.llm import LLMGenerationError, compress_history
+from engine.llm import LLMGenerationError, assign_debate_roles, compress_history
 from engine.debate_state import DebateState
 from engine.selector import select_conflict_axis, select_next_agent, select_silent_agent, select_target_post
 from models.agent import Agent, IdeologyVector
@@ -73,6 +73,7 @@ async def run_discussion(
     debate = DebateState.from_dict(saved_state) if saved_state else DebateState()
     last_speaker_id: str | None = None
     event_counter = 0
+    roles_initialized = debate.roles_initialized()
 
     try:
         while True:
@@ -84,6 +85,22 @@ async def run_discussion(
             if thread["state"] != "running":
                 await asyncio.sleep(2)
                 continue
+
+            # ── Role initialization (once per thread) ──────────────────────
+            if not roles_initialized:
+                agent_list = [
+                    agents[aid].persona
+                    for aid in thread["agent_ids"]
+                    if aid in agents
+                ]
+                try:
+                    roles = await assign_debate_roles(thread["topic"], agent_list)
+                    debate.set_debate_roles(roles)
+                    roles_initialized = True
+                    logger.info("debate_roles assigned for thread=%s: %s", thread_id, roles)
+                except Exception:
+                    logger.warning("assign_debate_roles failed", exc_info=True)
+                    roles_initialized = True  # don't retry on error
 
             posts = await db.fetch_posts(thread_id)
             if len(posts) != last_post_count:
@@ -116,8 +133,16 @@ async def run_discussion(
                 await db.update_thread_phase(thread_id, phase)
 
             if _should_facilitate(posts):
-                facilitate = await make_facilitate(thread, posts)
+                agent_display_names = {
+                    aid: agents[aid].display_name
+                    for aid in thread["agent_ids"] if aid in agents
+                }
+                facilitate = await make_facilitate(thread, posts, agent_display_names)
                 if facilitate and facilitate.get("content"):
+                    # Store axis assignments from rerail into DebateState
+                    ax_assignments = facilitate.get("axis_assignments", [])
+                    if ax_assignments:
+                        debate.push_axis_assignments(ax_assignments)
                     post = await db.save_post(
                         thread_id,
                         None,
@@ -205,6 +230,8 @@ async def run_discussion(
             available_arsenal = debate.get_available_arsenal(speaker_id, agents[speaker_id].persona)
             stance_drift = debate.is_stance_drifting(speaker_id)
             arsenal_novelty = debate.has_unused_arsenal(speaker_id, agents[speaker_id].persona)
+            debate_role = debate.get_debate_role(speaker_id)
+            forced_axis = debate.pop_forced_axis(speaker_id)
             context = {
                 "thread_topic": thread["topic"],
                 "current_tags": thread["topic_tags"],
@@ -220,6 +247,8 @@ async def run_discussion(
                 "recent_other_contents": recent_others,
                 "stagnation": stagnating,
                 "newcomer_event": newcomer_hint,
+                "debate_role": debate_role,
+                "forced_axis": forced_axis or "",
                 "stance_drift_warning": stance_drift,
                 "arsenal_novelty_push": arsenal_novelty,
                 "is_first_post": is_first_post,
