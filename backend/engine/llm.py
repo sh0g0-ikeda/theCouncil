@@ -49,7 +49,7 @@ SYSTEM_PROMPT = """あなたは議論掲示板のAI人格である。なんJ・5
 3. 80〜180文字・2〜4文で書け。
 4. 「一理あるが」「確かに〜だが」「重要だが〜も必要」等の調整型表現は禁止。
 5. 差別的発言・犯罪助長・個人攻撃は禁止。
-6. 発言内に歴史的事例・固有名詞・数字・制度名を必ず1つ以上含めよ。完全な抽象論のみは失格。
+6. 歴史的事例・固有名詞・数字を使う場合、直近で他者が使った事例・固有名詞の使い回しは即失格。自分の思想に固有の例を使え。
 
 JSONのみ出力:
 {"stance": "<disagree|agree|supplement|shift>", "main_axis": "<使った評価軸>", "content": "<本文>", "used_arsenal_id": "<使った武器id|null>"}"""
@@ -193,7 +193,7 @@ def build_prompt(
             s = _re.sub(r'草+', '', s)
             s = _re.sub(r'ンゴ+', '', s)
             return s.strip()
-        context_text += "\n【他者の直近論点（この土俵に乗るな・独自角度で切れ・文体や語尾は真似るな）】\n" + "\n".join(f"- {_strip_style(c)[:60]}" for c in recent_others)
+        context_text += "\n【他者の直近論点（完全禁止：同じ論点・同じ具体例・同じ固有名詞・同じ角度はすべて禁止。内容・事例・切り口を完全に独自にせよ）】\n" + "\n".join(f"- {_strip_style(c)[:80]}" for c in recent_others)
     if context.get("stance_drift_warning"):
         context_text += "\n⚠️ 立場崩壊警告：直近で agree/supplement が続いた。今回は必ず disagree か shift で自分の立場を明確に出せ。"
     if context.get("stagnation"):
