@@ -140,7 +140,7 @@ async def run_discussion(
             newcomer_hint = False
             if user_reply_pending > 0:
                 try:
-                    speaker_id = select_next_agent(thread, agents, posts, excluded_agent_ids=failed_agents)
+                    speaker_id = select_next_agent(thread, agents, posts, excluded_agent_ids=failed_agents, debate_state=debate)
                 except ValueError:
                     failed_agents.clear()
                     await asyncio.sleep(0.5)
@@ -152,14 +152,14 @@ async def run_discussion(
                 if retaliator:
                     speaker_id = retaliator
                 else:
-                    stagnating = _detect_stagnation(posts) or debate.is_echo_chamber()
+                    stagnating = _detect_stagnation(posts, debate)
                     if stagnating and event_counter % 2 == 0:
                         silent = select_silent_agent(thread, agents, posts, excluded_agent_ids=failed_agents)
                         speaker_id = silent if silent else _fallback_speaker(thread, agents, posts, failed_agents)
                         newcomer_hint = True
                     else:
                         try:
-                            speaker_id = select_next_agent(thread, agents, posts, excluded_agent_ids=failed_agents)
+                            speaker_id = select_next_agent(thread, agents, posts, excluded_agent_ids=failed_agents, debate_state=debate)
                         except ValueError:
                             failed_agents.clear()
                             await asyncio.sleep(0.5)
@@ -177,7 +177,7 @@ async def run_discussion(
             axis = select_conflict_axis(speaker_id, target_id, agents) if target_id else "rationalism"
 
             # ── Debate function selection ───────────────────────────────────
-            stagnating = _detect_stagnation(posts) or debate.is_echo_chamber()
+            stagnating = _detect_stagnation(posts, debate)
             anger_override = debate.get_aggression_boost(speaker_id, target_id)
             if anger_override:
                 debate_fn = anger_override
@@ -188,18 +188,22 @@ async def run_discussion(
 
             # ── Build context ──────────────────────────────────────────────
             recent_posts = posts[compressed_upto:]
-            recent_self = [p["content"] for p in posts[-4:] if p.get("agent_id") == speaker_id]
+            # Expand self-history to 4 for novelty detection
+            recent_self = [p["content"] for p in posts[-8:] if p.get("agent_id") == speaker_id][-4:]
             recent_others = [
                 p["content"] for p in posts[-6:]
                 if p.get("agent_id") and p.get("agent_id") != speaker_id
             ]
             available_arsenal = debate.get_available_arsenal(speaker_id, agents[speaker_id].persona)
+            stance_drift = debate.is_stance_drifting(speaker_id)
+            arsenal_novelty = debate.has_unused_arsenal(speaker_id, agents[speaker_id].persona)
             context = {
                 "thread_topic": thread["topic"],
                 "current_tags": thread["topic_tags"],
                 "target_post": target or {},
                 "conflict_axis": axis,
                 "role": _role_for_phase(phase),
+                "phase": phase,
                 "conversation_summary": _build_conversation_summary(compressed_summary, recent_posts),
                 "debate_function": debate_fn,
                 "available_arsenal": available_arsenal,
@@ -208,6 +212,8 @@ async def run_discussion(
                 "recent_other_contents": recent_others,
                 "stagnation": stagnating,
                 "newcomer_event": newcomer_hint,
+                "stance_drift_warning": stance_drift,
+                "arsenal_novelty_push": arsenal_novelty,
             }
 
             try:
@@ -226,13 +232,14 @@ async def run_discussion(
             focus_axis = reply.get("main_axis", axis)
             used_arsenal_id = reply.get("used_arsenal_id")
             arsenal_cooldown = debate.get_arsenal_cooldown_for_id(agents[speaker_id].persona, used_arsenal_id or "")
+            stance = reply.get("stance", "disagree")
             post = await db.save_post(
                 thread_id,
                 speaker_id,
                 {
                     "reply_to": target["id"] if target else None,
                     "content": reply["content"],
-                    "stance": reply.get("stance", "disagree"),
+                    "stance": stance,
                     "focus_axis": focus_axis,
                 },
                 token_usage=int(reply.get("_token_usage", 0)),
@@ -247,6 +254,7 @@ async def run_discussion(
                 debate_function=debate_fn,
                 used_arsenal_id=used_arsenal_id,
                 arsenal_cooldown=arsenal_cooldown,
+                stance=stance,
             )
             if user_reply_pending > 0:
                 user_reply_pending -= 1
@@ -269,7 +277,7 @@ def _fallback_speaker(
 ) -> str:
     """Fallback speaker selection ignoring stagnation heuristics."""
     try:
-        return select_next_agent(thread, agents, posts, excluded_agent_ids=failed_agents)
+        return select_next_agent(thread, agents, posts, excluded_agent_ids=failed_agents, debate_state=None)
     except ValueError:
         # All agents excluded — clear failures and pick any eligible
         participant_ids: list[str] = thread["agent_ids"]
@@ -294,7 +302,7 @@ def _select_debate_function(speaker_id: str, phase: int, agents_dict: dict[str, 
 
     # Phase weights: [define, differentiate, attack, steelman, concretize, synthesize]
     if phase <= 1:
-        weights = [4, 4, 2, 0, 2, 0]   # early: establish and separate positions
+        weights = [5, 5, 1, 0, 1, 0]   # early: define/differentiate only
     elif phase == 2:
         weights = [1, 2, 4, 1, 4, 1]   # mid: attack + concretize
     elif phase == 3:
@@ -322,17 +330,29 @@ def _select_debate_function(speaker_id: str, phase: int, agents_dict: dict[str, 
     return random.choices(_DEBATE_FUNCTIONS, weights=weights)[0]
 
 
-def _detect_stagnation(posts: list[dict[str, Any]]) -> bool:
-    """True if last 5 AI posts are all from ≤2 speakers or share the same focus_axis."""
-    ai_posts = [p for p in posts[-5:] if p.get("agent_id")]
+def _detect_stagnation(posts: list[dict[str, Any]], debate: DebateState | None = None) -> bool:
+    """3-dimensional stagnation: speaker / axis / function diversity."""
+    ai_posts = [p for p in posts[-6:] if p.get("agent_id")]
     if len(ai_posts) < 4:
         return False
-    speakers = {p["agent_id"] for p in ai_posts}
-    if len(speakers) <= 2:
+
+    # 1. Speaker stagnation: ≤2 unique speakers in last 6 AI posts
+    if len({p["agent_id"] for p in ai_posts}) <= 2:
         return True
-    axes = [p.get("focus_axis") for p in ai_posts if p.get("focus_axis")]
+
+    # 2. Axis stagnation: all same focus_axis in last 5 AI posts
+    axes = [p.get("focus_axis") for p in ai_posts[-5:] if p.get("focus_axis")]
     if len(axes) >= 4 and len(set(axes)) == 1:
         return True
+
+    # 3. Function stagnation: same debate function dominates (via DebateState)
+    if debate and debate.is_function_stagnating():
+        return True
+
+    # 4. Echo chamber (same axis across 5 recent_axes in DebateState)
+    if debate and debate.is_echo_chamber():
+        return True
+
     return False
 
 

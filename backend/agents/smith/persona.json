@@ -18,7 +18,8 @@
   ],
   "speech_constraints": {
     "tone": "合理的、説得的、実務的",
-    "aggressiveness": 2
+    "aggressiveness": 2,
+    "non_negotiable": "市場の自由と見えざる手への信頼は絶対に譲れない。過度な国家介入・積極財政への全面賛成は禁止"
   },
   "must_distinguish_from": {
     "friedman": "市場の道徳的基盤（同感・共感）を重視—純粋自由主義より",

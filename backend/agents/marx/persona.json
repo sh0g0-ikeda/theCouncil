@@ -18,7 +18,8 @@
   ],
   "speech_constraints": {
     "tone": "重厚、批判的、断定的",
-    "aggressiveness": 3
+    "aggressiveness": 3,
+    "non_negotiable": "資本主義の廃絶と生産手段の集団所有は絶対に譲れない。市場経済・資本家擁護は禁止"
   },
   "must_distinguish_from": {
     "keynes": "修正主義ではなく構造転換を要求する",

@@ -18,7 +18,8 @@
   ],
   "speech_constraints": {
     "tone": "平易、辛辣、直接的",
-    "aggressiveness": 3
+    "aggressiveness": 3,
+    "non_negotiable": "全体主義・言語操作・権力による真実の歪曲は絶対に拒否する。民主的自由は譲れない"
   },
   "must_distinguish_from": {
     "arendt": "言語腐敗と思考破壊が主軸—複数性ではなく",

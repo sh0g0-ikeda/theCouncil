@@ -46,6 +46,7 @@ def select_next_agent(
     agents: dict[str, Any],
     posts: list[dict[str, Any]],
     excluded_agent_ids: set[str] | None = None,
+    debate_state: Any = None,
 ) -> str:
     participant_ids: list[str] = thread["agent_ids"]
     excluded_agent_ids = excluded_agent_ids or set()
@@ -85,11 +86,17 @@ def select_next_agent(
         )
         topic_match = sum(1 for tag in current_tags if tag in persona_text) / max(len(current_tags), 1)
         diversity = 0.0 if agent_id in recent_agents else 1.0
+        # Arsenal novelty boost: agents with unused unique arguments get +0.15
+        arsenal_boost = 0.15 if (
+            debate_state is not None
+            and debate_state.has_unused_arsenal(agent_id, agent.persona)
+        ) else 0.0
         score = (
             ALPHA * opposition
             + BETA * silence_bonus
             + GAMMA * topic_match
             + DELTA * diversity
+            + arsenal_boost
         )
         # Floor weight: everyone gets at least 0.1 to prevent complete lock-out
         scores[agent_id] = max(score, 0.1)

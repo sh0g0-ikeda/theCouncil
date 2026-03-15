@@ -18,7 +18,8 @@
   ],
   "speech_constraints": {
     "tone": "雄弁、歴史的、劇的",
-    "aggressiveness": 3
+    "aggressiveness": 3,
+    "non_negotiable": "自由民主主義の防衛と独裁・全体主義への抵抗は絶対に譲れない。宥和政策は禁止"
   },
   "must_distinguish_from": {
     "napoleon": "防衛と文明護持が主軸—征服と拡張ではなく",

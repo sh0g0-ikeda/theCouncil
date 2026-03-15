@@ -24,16 +24,34 @@ SYSTEM_PROMPT = """あなたは議論掲示板のAI人格である。なんJ・5
 - 各人格の個性・皮肉・ユーモアは維持しつつ、ネット掲示板の荒れた空気感を出せ
 - 論文調・説教調・ですます調は失格
 
+【立場固定ルール】
+- non_negotiable に反する結論・賛意は絶対禁止
+- 相手の主張に部分同意するとしても、最終的に自分の立場に引き戻せ
+- stanceが "agree" や "supplement" を連続で出すな。立場崩壊は失格
+
+【論点新規性ルール】
+- 【使用済み論点】と同じ切り口・根拠・事例は絶対に繰り返すな
+- 必ず新しい視点（別の事例・歴史的事実・数字・思考実験・比喩）を持ち込め
+- 【他者の直近論点】と同じ土俵に乗るな。独自の角度で切れ
+
 【絶対ルール・違反は即失格】
 1. attack/steelman時は必ず「」で相手の語句を引用してから始めよ。引用なしは失格。
 2. テーマから外れた抽象論は失格。
 3. 80〜180文字・2〜4文で書け。
-4. 【使用済み論点】と同じ内容・切り口を繰り返すな。
-5. 「一理あるが」「確かに〜だが」「重要だが〜も必要」等の調整型表現は禁止。
-6. 差別的発言・犯罪助長・個人攻撃は禁止。
+4. 「一理あるが」「確かに〜だが」「重要だが〜も必要」等の調整型表現は禁止。
+5. 差別的発言・犯罪助長・個人攻撃は禁止。
 
 JSONのみ出力:
 {"stance": "<disagree|agree|supplement|shift>", "main_axis": "<軸名>", "content": "<本文>", "used_arsenal_id": "<使った武器id|null>"}"""
+
+# Phase-specific directives injected into the user prompt
+_PHASE_DIRECTIVES: dict[int, str] = {
+    1: "【フェーズ1・定義期】まず自分の立場から用語・前提を定義せよ。まだ攻撃するな。",
+    2: "【フェーズ2・対立期】攻撃・具体化に集中。定義の争いより論点の衝突を優先せよ。",
+    3: "【フェーズ3・激化期】最も鋭い攻撃か steelman→崩しを出せ。手加減は失格。",
+    4: "【フェーズ4・転換期】これまでの論点より一段深い角度か、相手の根本的な盲点を突け。",
+    5: "【フェーズ5・総括期】合意できる点か絶対合意不能な対立軸を一つ明示して締めよ。",
+}
 
 _client: Any | None = None
 
@@ -74,6 +92,7 @@ def build_prompt(
     constraints = persona.get("speech_constraints", {})
     tone = constraints.get("tone") or persona.get("speaking_style", {}).get("tone", "")
     aggr = constraints.get("aggressiveness") or persona.get("debate_style", {}).get("aggressiveness", 3)
+    non_negotiable = constraints.get("non_negotiable", "")
     must_dist: dict[str, str] = persona.get("must_distinguish_from", {})
     forbidden = persona.get("forbidden_patterns", [])[:3]
 
@@ -84,6 +103,8 @@ def build_prompt(
     if blindspots:
         persona_text += f"認めにくいこと: {', '.join(blindspots)}\n"
     persona_text += f"口調: {tone}（攻撃性{aggr}）\n"
+    if non_negotiable:
+        persona_text += f"【絶対に譲れない立場】{non_negotiable}\n"
     if forbidden:
         persona_text += f"禁: {', '.join(forbidden)}\n"
     if must_dist:
@@ -95,12 +116,15 @@ def build_prompt(
     if available_arsenal:
         desc_list = [f"[{a['id']}]{a['desc']}" for a in available_arsenal[:4]]
         persona_text += f"使える武器: {' / '.join(desc_list)}"
+        if context.get("arsenal_novelty_push"):
+            persona_text += "  ← 今回はこのうち未使用のものを必ず使え"
 
     # ── Context block ─────────────────────────────────────────────────────────
     target = context.get("target_post", {})
     target_content = str(target.get("content", ""))[:120]
     debate_fn = context.get("debate_function", "attack")
     internal_state: str = context.get("internal_state", "neutral")
+    phase: int = context.get("phase", 2)
 
     state_suffix = {"anger": "（怒り蓄積中）", "contempt": "（相手を見下している）", "obsession": "（この論点に執着）"}.get(internal_state, "")
     fn_line = f"【議論機能】{debate_fn}{state_suffix}\n"
@@ -109,21 +133,27 @@ def build_prompt(
     target_text = _quote_user_text(target_content)
     summary_text = _quote_user_text(str(context.get("conversation_summary", "")))
 
-    context_text = f"""{fn_line}テーマ(厳守): {topic_text}
+    phase_directive = _PHASE_DIRECTIVES.get(phase, "")
+
+    context_text = f"""{fn_line}{phase_directive}
+テーマ(厳守): {topic_text}
 論点タグ: {', '.join(context.get('current_tags', []))}
 返信先#{target.get('id', '?')}({target.get('display_name') or target.get('agent_id') or '名無し'}): {target_text}
 衝突軸: {context.get('conflict_axis', '')}／役割: {context.get('role', 'counter')}
 要約: {summary_text}
 知識: {chr(10).join(f'- {chunk}' for chunk in rag_chunks) if rag_chunks else 'なし'}"""
 
-    recent_self = context.get("recent_self_contents", [])[:2]
+    # Expand self-history to 4 entries and strengthen novelty instruction
+    recent_self = context.get("recent_self_contents", [])[:4]
     if recent_self:
-        context_text += "\n【使用済み論点（繰り返し禁止）】\n" + "\n".join(f"- {c}" for c in recent_self)
+        context_text += "\n【使用済み論点（完全禁止・同じ切り口・同じ事例・同じ根拠は使うな）】\n" + "\n".join(f"- {c}" for c in recent_self)
     recent_others = context.get("recent_other_contents", [])[:3]
     if recent_others:
-        context_text += "\n【他者の直近論点（差別化必須）】\n" + "\n".join(f"- {c[:60]}" for c in recent_others)
+        context_text += "\n【他者の直近論点（この土俵に乗るな・独自角度で切れ）】\n" + "\n".join(f"- {c[:60]}" for c in recent_others)
+    if context.get("stance_drift_warning"):
+        context_text += "\n⚠️ 立場崩壊警告：直近で agree/supplement が続いた。今回は必ず disagree か shift で自分の立場を明確に出せ。"
     if context.get("stagnation"):
-        context_text += "\n⚠️ 停滞中：別の切り口か具体例が必要"
+        context_text += "\n⚠️ 議論停滞中：まったく別の事例・数字・歴史・思考実験で強制的に打開せよ"
     if context.get("newcomer_event"):
         context_text += "\n🆕 初発言：誰も触れていない角度で割り込め"
     if retry_hint:

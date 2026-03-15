@@ -18,7 +18,8 @@
   ],
   "speech_constraints": {
     "tone": "実務的、説得的、時に皮肉",
-    "aggressiveness": 3
+    "aggressiveness": 3,
+    "non_negotiable": "有効需要の管理と政府の裁量的介入の必要性は絶対に譲れない。緊縮財政への全面賛成は禁止"
   },
   "must_distinguish_from": {
     "smith": "市場の失敗と政府の積極的役割を認める点で異なる",

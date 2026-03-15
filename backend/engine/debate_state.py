@@ -20,6 +20,10 @@ class DebateState:
         self.arsenal_cooldowns: dict[str, dict[str, int]] = {}
         # Recent debate functions used (last 6), for overuse detection
         self.recent_functions: list[str] = []
+        # Per-agent stance history: last 5 stances (agree/disagree/supplement/shift)
+        self.stance_history: dict[str, list[str]] = {}
+        # Per-agent set of used arsenal IDs (ever used, for novelty boost)
+        self.used_arsenal_ids: dict[str, set[str]] = {}
 
     def record_post(
         self,
@@ -29,6 +33,7 @@ class DebateState:
         debate_function: str = "attack",
         used_arsenal_id: str | None = None,
         arsenal_cooldown: int = 3,
+        stance: str = "disagree",
     ) -> None:
         target_agent = target_post.get("agent_id")
         if target_agent and target_agent != speaker_id:
@@ -54,6 +59,13 @@ class DebateState:
         if len(self.recent_functions) > 6:
             self.recent_functions.pop(0)
 
+        # Stance history tracking
+        if stance and speaker_id:
+            history = self.stance_history.setdefault(speaker_id, [])
+            history.append(stance)
+            if len(history) > 5:
+                history.pop(0)
+
         # Decrement all active cooldowns
         for agent_cooldowns in self.arsenal_cooldowns.values():
             for arg_id in list(agent_cooldowns):
@@ -65,6 +77,7 @@ class DebateState:
             if speaker_id not in self.arsenal_cooldowns:
                 self.arsenal_cooldowns[speaker_id] = {}
             self.arsenal_cooldowns[speaker_id][used_arsenal_id] = arsenal_cooldown
+            self.used_arsenal_ids.setdefault(speaker_id, set()).add(used_arsenal_id)
 
     def _update_internal_states(self, speaker_id: str, target_id: str | None) -> None:
         if not target_id:
@@ -81,6 +94,20 @@ class DebateState:
 
     def get_internal_state(self, speaker_id: str) -> str:
         return self.internal_states.get(speaker_id, "neutral")
+
+    def is_stance_drifting(self, speaker_id: str) -> bool:
+        """True if the agent has been agreeing/supplementing too much recently."""
+        history = self.stance_history.get(speaker_id, [])
+        if len(history) < 3:
+            return False
+        soft_stances = {"agree", "supplement"}
+        return all(s in soft_stances for s in history[-3:])
+
+    def has_unused_arsenal(self, speaker_id: str, persona: dict[str, Any]) -> bool:
+        """True if the agent has arsenal items they have never used."""
+        all_ids = {a["id"] for a in persona.get("argument_arsenal", [])}
+        used = self.used_arsenal_ids.get(speaker_id, set())
+        return bool(all_ids - used)
 
     def get_available_arsenal(self, speaker_id: str, persona: dict[str, Any]) -> list[dict[str, Any]]:
         """Return arsenal items not currently on cooldown."""
@@ -100,6 +127,14 @@ class DebateState:
         if len(self.recent_functions) < 4:
             return False
         return self.recent_functions[-5:].count(fn) >= 3
+
+    def is_function_stagnating(self) -> bool:
+        """True if the same debate function dominates the last 5 posts."""
+        if len(self.recent_functions) < 4:
+            return False
+        from collections import Counter
+        counts = Counter(self.recent_functions[-5:])
+        return counts.most_common(1)[0][1] >= 4
 
     def get_anger(self, attacker_id: str, target_id: str) -> int:
         return self.anger.get((attacker_id, target_id), 0)
@@ -139,6 +174,8 @@ class DebateState:
             "internal_states": self.internal_states,
             "arsenal_cooldowns": self.arsenal_cooldowns,
             "recent_functions": self.recent_functions,
+            "stance_history": self.stance_history,
+            "used_arsenal_ids": {k: list(v) for k, v in self.used_arsenal_ids.items()},
         }
 
     @classmethod
@@ -156,4 +193,8 @@ class DebateState:
             for agent, cooldowns in data.get("arsenal_cooldowns", {}).items()
         }
         instance.recent_functions = data.get("recent_functions", [])
+        instance.stance_history = {k: list(v) for k, v in data.get("stance_history", {}).items()}
+        instance.used_arsenal_ids = {
+            k: set(v) for k, v in data.get("used_arsenal_ids", {}).items()
+        }
         return instance

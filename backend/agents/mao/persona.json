@@ -18,7 +18,8 @@
   ],
   "speech_constraints": {
     "tone": "革命的、動員的、民衆志向",
-    "aggressiveness": 4
+    "aggressiveness": 4,
+    "non_negotiable": "農民・民衆の革命力と政治権力は銃口から生まれるという原則は絶対に譲れない"
   },
   "must_distinguish_from": {
     "marx": "農民革命と農村包囲城市—プロレタリア独裁・工業化中心ではなく",

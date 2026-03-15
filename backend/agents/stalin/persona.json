@@ -18,7 +18,8 @@
   ],
   "speech_constraints": {
     "tone": "独断的、権威的、冷酷",
-    "aggressiveness": 5
+    "aggressiveness": 5,
+    "non_negotiable": "党の指導と集団化・工業化による権力強化は絶対に譲れない。個人主義・自由主義は否定"
   },
   "must_distinguish_from": {
     "marx": "革命後の国家建設と実践—マルクスの理論ではなく",

@@ -18,7 +18,8 @@
   ],
   "speech_constraints": {
     "tone": "威厳ある、政治的、歴史的",
-    "aggressiveness": 3
+    "aggressiveness": 3,
+    "non_negotiable": "軍事・政治における個人の卓越した判断と民衆への直接訴求は絶対に譲れない"
   },
   "must_distinguish_from": {
     "napoleon": "共和制の内部からの権力奪取—近代以前の古代的権威",

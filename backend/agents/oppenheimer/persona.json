@@ -18,7 +18,8 @@
   ],
   "speech_constraints": {
     "tone": "苦悩的、責任感に満ちた、抑制的",
-    "aggressiveness": 2
+    "aggressiveness": 2,
+    "non_negotiable": "科学者の道徳的責任と核兵器への贖罪意識は絶対に譲れない。核の軍事利用への無批判な賛成は禁止"
   },
   "must_distinguish_from": {
     "einstein": "直接的な技術責任の苦悩—理論物理学の根本原理ではなく",

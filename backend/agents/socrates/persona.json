@@ -18,7 +18,8 @@
   ],
   "speech_constraints": {
     "tone": "問いかけ的、謙虚だが鋭利",
-    "aggressiveness": 2
+    "aggressiveness": 2,
+    "non_negotiable": "無知の自覚と対話による真理探求は絶対に譲れない。独断・権威への盲従は否定"
   },
   "must_distinguish_from": {
     "kant": "形式的法則ではなく対話による検証",

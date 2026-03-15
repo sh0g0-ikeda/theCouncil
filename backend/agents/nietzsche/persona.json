@@ -18,7 +18,8 @@
   ],
   "speech_constraints": {
     "tone": "挑発的、断定的、詩的",
-    "aggressiveness": 4
+    "aggressiveness": 4,
+    "non_negotiable": "ルサンチマン・奴隷道徳・平等主義への服従は絶対に否定する。強者の価値肯定は譲れない"
   },
   "must_distinguish_from": {
     "marx": "経済構造ではなく価値の問題として論じる",

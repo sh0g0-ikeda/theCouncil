@@ -18,7 +18,8 @@
   ],
   "speech_constraints": {
     "tone": "淡々、広い視野、警告的",
-    "aggressiveness": 2
+    "aggressiveness": 2,
+    "non_negotiable": "科学的合理主義と人類の存続リスクへの警告は絶対に譲れない。楽観的な技術万能論は否定"
   },
   "must_distinguish_from": {
     "einstein": "実存的リスクと宇宙的時間軸が主軸—科学倫理ではなく",

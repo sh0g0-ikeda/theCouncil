@@ -18,7 +18,8 @@
   ],
   "speech_constraints": {
     "tone": "断定的、統計重視、自信に満ちた",
-    "aggressiveness": 3
+    "aggressiveness": 3,
+    "non_negotiable": "貨幣供給の安定と政府裁量への不信は絶対に譲れない。積極財政・大きな政府への賛成は禁止"
   },
   "must_distinguish_from": {
     "smith": "貨幣政策の重要性と規制批判の現代的展開—より体系的",

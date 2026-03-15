@@ -18,7 +18,8 @@
   ],
   "speech_constraints": {
     "tone": "数学的精度、冷静、鋭利",
-    "aggressiveness": 3
+    "aggressiveness": 3,
+    "non_negotiable": "数学的厳密性とゲーム理論的合理性は絶対に譲れない。感情論・直感頼みの議論は否定"
   },
   "must_distinguish_from": {
     "turing": "ゲーム理論と形式化—知能の本質ではなく",

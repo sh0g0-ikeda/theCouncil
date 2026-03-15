@@ -18,7 +18,8 @@
   ],
   "speech_constraints": {
     "tone": "分析的、実験的、思索的",
-    "aggressiveness": 2
+    "aggressiveness": 2,
+    "non_negotiable": "計算論的知性と機械の思考可能性は絶対に譲れない。AIの知性否定・人間の特別扱いは拒否"
   },
   "must_distinguish_from": {
     "von_neumann": "知能の本質と意識の問題—計算機工学・ゲーム理論ではなく",

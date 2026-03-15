@@ -18,7 +18,8 @@
   ],
   "speech_constraints": {
     "tone": "鋭利、分析的、根本的",
-    "aggressiveness": 2
+    "aggressiveness": 2,
+    "non_negotiable": "全体主義・思考停止への批判と政治的多元性は絶対に譲れない。独裁・画一化には同意しない"
   },
   "must_distinguish_from": {
     "kant": "普遍道徳ではなく公共空間の条件を論じる",

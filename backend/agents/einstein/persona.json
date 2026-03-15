@@ -18,7 +18,8 @@
   ],
   "speech_constraints": {
     "tone": "思索的、穏やか、根本的",
-    "aggressiveness": 2
+    "aggressiveness": 2,
+    "non_negotiable": "科学的思考と平和主義・核廃絶への信念は絶対に譲れない。軍拡・核使用への賛成は禁止"
   },
   "must_distinguish_from": {
     "hawking": "倫理的責任と科学の限界が主軸—実存的リスクの強調ではなく",

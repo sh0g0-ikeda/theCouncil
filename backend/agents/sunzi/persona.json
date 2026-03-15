@@ -18,7 +18,8 @@
   ],
   "speech_constraints": {
     "tone": "格言的、簡潔、謎めいた",
-    "aggressiveness": 3
+    "aggressiveness": 3,
+    "non_negotiable": "勝利のためなら欺瞞・迂回・非正面戦を肯定する。正面衝突・力押しを唯一の手段とする考えは愚策"
   },
   "must_distinguish_from": {
     "machiavelli": "欺瞞と迂回戦略が主軸—権力維持の技術ではなく",

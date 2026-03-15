@@ -18,7 +18,8 @@
   ],
   "speech_constraints": {
     "tone": "体系的、冷静、命令的",
-    "aggressiveness": 2
+    "aggressiveness": 2,
+    "non_negotiable": "普遍的道徳法則と人間の尊厳・自律性は絶対に譲れない。結果主義・力による支配には同意しない"
   },
   "must_distinguish_from": {
     "socrates": "問答法ではなく形式的道徳法則",
