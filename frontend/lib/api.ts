@@ -7,6 +7,8 @@ export type AgentSummary = {
   persona_json?: {
     core_beliefs?: string[];
     values?: string[];
+    categories?: string[];
+    worldview?: string[];
   };
   vector?: number[];
 };
