@@ -287,6 +287,10 @@ class DatabaseClient:
                 result = await conn.execute("UPDATE threads SET locked_at = NOW() WHERE id = $1", thread_id)
             elif action == "force_complete":
                 result = await conn.execute("UPDATE threads SET state = 'completed' WHERE id = $1", thread_id)
+            elif action == "set_public":
+                result = await conn.execute("UPDATE threads SET visibility = 'public' WHERE id = $1", thread_id)
+            elif action == "set_private":
+                result = await conn.execute("UPDATE threads SET visibility = 'private' WHERE id = $1", thread_id)
             else:  # pragma: no cover - guarded by API validation
                 raise ValueError("invalid_thread_action")
         return not result.endswith(" 0")

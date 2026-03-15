@@ -8,6 +8,7 @@ type AdminThread = ThreadSummary & {
   owner_email?: string | null;
   hidden_at?: string | null;
   locked_at?: string | null;
+  deleted_at?: string | null;
 };
 
 export default async function AdminThreadsPage() {
@@ -31,25 +32,44 @@ export default async function AdminThreadsPage() {
             <tr>
               <th className="px-4 py-3">Thread</th>
               <th className="px-4 py-3">Owner</th>
-              <th className="px-4 py-3">State</th>
+              <th className="px-4 py-3">State / Visibility</th>
               <th className="px-4 py-3">Actions</th>
             </tr>
           </thead>
           <tbody>
             {threads.map((thread) => (
-              <tr key={thread.id} className="border-t border-board-border/60 align-top">
+              <tr
+                key={thread.id}
+                className={`border-t border-board-border/60 align-top ${thread.deleted_at ? "opacity-40" : ""}`}
+              >
                 <td className="px-4 py-4">
                   <div className="font-semibold text-board-ink">{thread.topic}</div>
                   <div className="mt-1 text-xs text-board-muted">{thread.agent_ids.join(" / ")}</div>
+                  <div className="mt-1 text-xs text-board-muted">{thread.id}</div>
                 </td>
                 <td className="px-4 py-4 text-board-muted">{thread.owner_email ?? "-"}</td>
                 <td className="px-4 py-4 text-board-muted">
-                  {thread.state}
-                  {thread.hidden_at ? " / hidden" : ""}
-                  {thread.locked_at ? " / locked" : ""}
+                  <div>{thread.state}</div>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${
+                      thread.visibility === "public"
+                        ? "bg-emerald-100 text-emerald-700"
+                        : "bg-stone-200 text-stone-600"
+                    }`}>
+                      {thread.visibility}
+                    </span>
+                    {thread.hidden_at && <span className="rounded bg-yellow-100 px-1.5 py-0.5 text-xs text-yellow-700">hidden</span>}
+                    {thread.locked_at && <span className="rounded bg-orange-100 px-1.5 py-0.5 text-xs text-orange-700">locked</span>}
+                    {thread.deleted_at && <span className="rounded bg-red-100 px-1.5 py-0.5 text-xs text-red-700">deleted</span>}
+                  </div>
                 </td>
                 <td className="px-4 py-4">
                   <div className="flex flex-wrap gap-2">
+                    {thread.visibility === "private" ? (
+                      <AdminActionButton path={`/api/admin/threads/${thread.id}`} body={{ action: "set_public" }} label="公開にする" className="border-emerald-300 text-emerald-700 hover:bg-emerald-50" />
+                    ) : (
+                      <AdminActionButton path={`/api/admin/threads/${thread.id}`} body={{ action: "set_private" }} label="非公開にする" className="border-board-border hover:bg-white" />
+                    )}
                     <AdminActionButton path={`/api/admin/threads/${thread.id}`} body={{ action: "hide" }} label="非表示" className="border-board-border hover:bg-white" />
                     <AdminActionButton path={`/api/admin/threads/${thread.id}`} body={{ action: "lock" }} label="ロック" className="border-board-border hover:bg-white" />
                     <AdminActionButton path={`/api/admin/threads/${thread.id}`} body={{ action: "force_complete" }} label="終了" className="border-board-border hover:bg-white" />

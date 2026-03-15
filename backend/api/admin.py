@@ -13,7 +13,7 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
 class ThreadActionRequest(BaseModel):
-    action: str = Field(pattern="^(hide|delete|lock|force_complete)$")
+    action: str = Field(pattern="^(hide|delete|lock|force_complete|set_public|set_private)$")
 
 
 class PostActionRequest(BaseModel):
