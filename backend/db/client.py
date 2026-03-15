@@ -431,24 +431,33 @@ class DatabaseClient:
 
     async def sync_agents_from_disk(self, agents_data: list[dict[str, Any]]) -> None:
         """Upsert agents from persona.json files; preserves existing enabled flag."""
+        _VECTOR_KEYS = [
+            "tech_optimism", "state_intervention", "market_trust", "order_preference",
+            "individualism", "rationalism", "power_affirmation", "moral_universalism",
+            "strategic_aggression", "future_orientation",
+        ]
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
             for agent in agents_data:
                 persona_str = json.dumps(agent, ensure_ascii=False)
+                iv = agent.get("ideology_vector", {})
+                vector = [iv.get(k, 0) for k in _VECTOR_KEYS]
                 await conn.execute(
                     """
-                    INSERT INTO agents (id, display_name, label, persona_json, enabled)
-                    VALUES ($1, $2, $3, $4::jsonb, TRUE)
+                    INSERT INTO agents (id, display_name, label, persona_json, vector, enabled)
+                    VALUES ($1, $2, $3, $4::jsonb, $5::integer[], TRUE)
                     ON CONFLICT (id) DO UPDATE
                         SET display_name = EXCLUDED.display_name,
                             label = EXCLUDED.label,
                             persona_json = EXCLUDED.persona_json,
+                            vector = EXCLUDED.vector,
                             updated_at = NOW()
                     """,
                     agent["id"],
                     agent["display_name"],
                     agent["label"],
                     persona_str,
+                    vector,
                 )
 
     async def admin_update_agent(

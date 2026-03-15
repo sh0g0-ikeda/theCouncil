@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 
@@ -75,17 +76,28 @@ async def security_headers_middleware(request: Request, call_next):
     return response
 
 
+async def _ws_keepalive(websocket: WebSocket, interval: int = 25) -> None:
+    try:
+        while True:
+            await asyncio.sleep(interval)
+            await websocket.send_text("ping")
+    except Exception:
+        pass
+
+
 @app.websocket("/ws/{thread_id}")
 async def ws_endpoint(websocket: WebSocket, thread_id: str) -> None:
     await connection_manager.connect(thread_id, websocket)
+    keepalive = asyncio.create_task(_ws_keepalive(websocket))
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
         logger.info("client disconnected from thread %s", thread_id)
-        connection_manager.disconnect(thread_id, websocket)
     except Exception:
         logger.warning("unexpected error in ws_endpoint thread=%s", thread_id, exc_info=True)
+    finally:
+        keepalive.cancel()
         connection_manager.disconnect(thread_id, websocket)
 
 

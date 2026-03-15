@@ -18,7 +18,7 @@ class CreateThreadRequest(BaseModel):
     topic: str = Field(min_length=3, max_length=500)
     agent_ids: list[str]
     visibility: str = "public"
-    max_posts: int = Field(default=50, ge=10, le=200)
+    max_posts: int = Field(default=30, ge=10, le=200)
 
 
 class SpeedRequest(BaseModel):

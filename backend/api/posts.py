@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 from api.deps import RequestUser, require_user
 from db.client import DatabaseClient, get_db
+from engine.discussion import start_discussion
 from engine.llm import moderate_text, validate_reply_length
 from rate_limit import limiter
 from realtime import connection_manager
@@ -53,4 +54,8 @@ async def create_post(
         token_usage=0,
     )
     await connection_manager.broadcast(thread_id, post)
+    if thread.get("state") == "running":
+        async def push(tid: str, p: dict) -> None:
+            await connection_manager.broadcast(tid, p)
+        await start_discussion(thread_id, push)
     return post
