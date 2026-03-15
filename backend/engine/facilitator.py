@@ -143,6 +143,10 @@ def _select_facilitator_function(posts: list[dict[str, Any]]) -> str:
     """Choose facilitator function based on what the debate currently lacks."""
     ai_posts = [p for p in posts if p.get("agent_id")]
 
+    # Very early (≤3 posts): force definitional intervention to anchor key terms
+    if len(posts) <= 3:
+        return "differentiate"
+
     if len(ai_posts) <= 12:
         return random.choice(["define", "differentiate"])
 

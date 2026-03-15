@@ -57,9 +57,15 @@ async def start_discussion(
 
 
 def _should_facilitate(posts: list[dict[str, Any]]) -> bool:
-    if not posts or len(posts) % 7 != 0:
+    if not posts:
         return False
-    return not posts[-1].get("is_facilitator", False)
+    if posts[-1].get("is_facilitator", False):
+        return False
+    n = len(posts)
+    # Early definitional intervention: fire at post 3 to anchor key terms
+    if n == 3:
+        return True
+    return n % 7 == 0
 
 
 async def run_discussion(
