@@ -226,7 +226,7 @@ class DebateState:
 
     def to_dict(self) -> dict:
         return {
-            "anger": {f"{k[0]}\x00{k[1]}": v for k, v in self.anger.items()},
+            "anger": [[k[0], k[1], v] for k, v in self.anger.items()],
             "retaliation_queue": self.retaliation_queue,
             "recent_axes": self.recent_axes,
             "internal_states": self.internal_states,
@@ -243,10 +243,18 @@ class DebateState:
     @classmethod
     def from_dict(cls, data: dict) -> "DebateState":
         instance = cls()
-        for key_str, v in data.get("anger", {}).items():
-            parts = key_str.split("\x00", 1)
-            if len(parts) == 2:
-                instance.anger[(parts[0], parts[1])] = v
+        anger_raw = data.get("anger", [])
+        if isinstance(anger_raw, list):
+            # New format: [[attacker_id, target_id, count], ...]
+            for item in anger_raw:
+                if isinstance(item, (list, tuple)) and len(item) == 3:
+                    instance.anger[(str(item[0]), str(item[1]))] = int(item[2])
+        elif isinstance(anger_raw, dict):
+            # Legacy format: {"attacker\x00target": count}
+            for key_str, v in anger_raw.items():
+                parts = key_str.split("\x00", 1)
+                if len(parts) == 2:
+                    instance.anger[(parts[0], parts[1])] = v
         instance.retaliation_queue = data.get("retaliation_queue", [])
         instance.recent_axes = data.get("recent_axes", [])
         instance.internal_states = data.get("internal_states", {})

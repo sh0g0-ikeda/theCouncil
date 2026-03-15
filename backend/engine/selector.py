@@ -82,8 +82,8 @@ def select_next_agent(
         opposition = (agent.vector.manhattan_distance(last_vector) / 70.0) if last_vector else 0.5
         silence_bonus = max(0.0, (avg_count - post_counts[agent_id]) / avg_count) if avg_count > 0 else 0.0
         persona_text = " ".join(
-            agent.persona.get("worldview", agent.persona.get("core_beliefs", []))
-            + agent.persona.get("combat_doctrine", agent.persona.get("values", []))
+            agent.persona.get("worldview", [])
+            + agent.persona.get("combat_doctrine", [])
         )
         topic_match = sum(1 for tag in current_tags if tag in persona_text) / max(len(current_tags), 1)
         # Diversity: 0 if spoke in last 6, 0.5 if spoke in last 3, 1 if not recent

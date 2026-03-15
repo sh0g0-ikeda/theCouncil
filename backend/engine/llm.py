@@ -94,16 +94,16 @@ def build_prompt(
     context: dict[str, Any],
     retry_hint: str | None = None,
 ) -> list[dict[str, str]]:
-    # ── Persona block (new format with old-format fallback) ──────────────────
-    worldview = persona.get("worldview", persona.get("core_beliefs", []))
-    combat = persona.get("combat_doctrine", [])
-    blindspots = persona.get("blindspots", [])
-    constraints = persona.get("speech_constraints", {})
-    tone = constraints.get("tone") or persona.get("speaking_style", {}).get("tone", "")
-    aggr = constraints.get("aggressiveness") or persona.get("debate_style", {}).get("aggressiveness", 3)
-    non_negotiable = constraints.get("non_negotiable", "")
+    # ── Persona block ────────────────────────────────────────────────────────
+    worldview: list[str] = persona.get("worldview", [])
+    combat: list[str] = persona.get("combat_doctrine", [])
+    blindspots: list[str] = persona.get("blindspots", [])
+    constraints: dict[str, Any] = persona.get("speech_constraints", {})
+    tone: str = constraints.get("tone", "")
+    aggr: int = int(constraints.get("aggressiveness", 3))
+    non_negotiable: str = constraints.get("non_negotiable", "")
     must_dist: dict[str, str] = persona.get("must_distinguish_from", {})
-    forbidden = persona.get("forbidden_patterns", [])[:3]
+    forbidden: list[str] = persona.get("forbidden_patterns", [])[:3]
 
     persona_text = f"【{persona['display_name']}／{persona['label']}】\n"
     persona_text += f"⚔️ あなたは{persona['display_name']}であり、この名前を汚すな。以下の世界観・原則に反する発言は即失格。\n"

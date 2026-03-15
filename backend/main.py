@@ -43,7 +43,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_load_cors_origins(),
     allow_methods=["GET", "POST", "PATCH", "OPTIONS"],
-    allow_headers=["*"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 app.include_router(agents_router)
 app.include_router(threads_router)
@@ -87,6 +87,11 @@ async def _ws_keepalive(websocket: WebSocket, interval: int = 25) -> None:
 
 @app.websocket("/ws/{thread_id}")
 async def ws_endpoint(websocket: WebSocket, thread_id: str) -> None:
+    # Reject subscriptions to private or deleted threads before accepting
+    thread = await get_db().fetch_thread(thread_id)
+    if not thread or thread.get("deleted_at") or thread.get("visibility") != "public":
+        await websocket.close(code=4003)
+        return
     await connection_manager.connect(thread_id, websocket)
     keepalive = asyncio.create_task(_ws_keepalive(websocket))
     try:
