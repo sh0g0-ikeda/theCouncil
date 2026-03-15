@@ -118,18 +118,46 @@ def select_next_agent(
 
 
 def select_target_post(posts: list[dict[str, Any]], speaker_id: str, agents: dict[str, Any]) -> dict[str, Any] | None:
+    """Weighted-random target selection: ideological distance as weight.
+
+    Uses recency-deduplication so the same post is not targeted by consecutive
+    speakers, and adds a recency bonus so recent posts are more likely targets.
+    """
     speaker_vector = agents[speaker_id].vector
-    best_post: dict[str, Any] | None = None
-    best_distance = -1
-    for post in reversed(posts[-20:]):
+
+    # Find the post that was just targeted by the previous AI speaker (to avoid pile-on)
+    last_target_id: int | None = None
+    for p in reversed(posts[-3:]):
+        if p.get("agent_id") and p["agent_id"] != speaker_id and p.get("reply_to"):
+            last_target_id = p["reply_to"]
+            break
+
+    candidates: list[dict[str, Any]] = []
+    weights: list[float] = []
+
+    seen_agents: set[str] = set()
+    for i, post in enumerate(reversed(posts[-20:])):
         agent_id = post.get("agent_id")
         if not agent_id or agent_id == speaker_id or agent_id not in agents:
             continue
+        # One candidate per agent (most recent post wins — reversed order)
+        if agent_id in seen_agents:
+            continue
+        seen_agents.add(agent_id)
+
         distance = agents[agent_id].vector.manhattan_distance(speaker_vector)
-        if distance > best_distance:
-            best_distance = distance
-            best_post = post
-    return best_post
+        # Recency bonus: first 5 in reversed order get +10
+        recency = max(0.0, (5 - i) * 2.0)
+        weight = max(distance + recency, 1.0)
+        # Halve weight if this post was just targeted by the previous speaker
+        if post.get("id") == last_target_id:
+            weight *= 0.3
+        candidates.append(post)
+        weights.append(weight)
+
+    if not candidates:
+        return None
+    return random.choices(candidates, weights=weights)[0]
 
 
 def select_conflict_axis(speaker_id: str, target_id: str, agents: dict[str, Any]) -> str:
