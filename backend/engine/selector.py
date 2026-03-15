@@ -85,16 +85,22 @@ def select_next_agent(
         )
         topic_match = sum(1 for tag in current_tags if tag in persona_text) / max(len(current_tags), 1)
         diversity = 0.0 if agent_id in recent_agents else 1.0
-        scores[agent_id] = (
+        score = (
             ALPHA * opposition
             + BETA * silence_bonus
             + GAMMA * topic_match
             + DELTA * diversity
         )
+        # Floor weight: everyone gets at least 0.1 to prevent complete lock-out
+        scores[agent_id] = max(score, 0.1)
 
     if not scores:
         raise ValueError("No eligible agents available")
-    return max(scores, key=scores.__getitem__)
+
+    # Weighted random sampling: preserves signal but prevents deterministic lock-in
+    candidates = list(scores.keys())
+    weights = [scores[a] for a in candidates]
+    return random.choices(candidates, weights=weights)[0]
 
 
 def select_target_post(posts: list[dict[str, Any]], speaker_id: str, agents: dict[str, Any]) -> dict[str, Any] | None:
