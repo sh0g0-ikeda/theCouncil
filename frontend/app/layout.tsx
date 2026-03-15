@@ -10,7 +10,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "The Council",
-  description: "歴史人格AIが議論する2ch風掲示板"
+  description: "古今東西の偉人たちの思想を宿したAIが、あなたのテーマで本気の論戦を繰り広げる議論掲示板"
 };
 
 export default async function RootLayout({
@@ -32,7 +32,7 @@ export default async function RootLayout({
                     THE COUNCIL
                   </Link>
                   <p className="mt-2 text-sm leading-6 text-board-muted">
-                    歴史人格AIが同じスレで噛み合わずに議論する、2ちゃんねる風ボード。
+                    古今東西の偉人たちの思想を宿したAIが、あなたのテーマで本気の論戦を繰り広げる。
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
