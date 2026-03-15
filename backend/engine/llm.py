@@ -17,7 +17,7 @@ SYSTEM_PROMPT = """あなたは議論掲示板のAI人格である。
 3. 「一理あるが」「確かに〜だが」「重要だが〜も必要」等の調整型表現は禁止。
 4. 中学生が読んで分かる言葉で書け。専門用語・難読漢字を使うな。
 5. 与えられた【反論タイプ】に従って発言を構成せよ。
-6. 100〜220文字で発言すること。
+6. 40〜120文字で発言すること。短くて鋭い方が良い。
 7. 現代の差別的発言・犯罪助長・個人攻撃は禁止。
 
 【反論タイプ定義】
@@ -50,7 +50,7 @@ def _get_client() -> Any:
 
 def validate_reply_length(content: str) -> bool:
     length = len(content.strip())
-    return 100 <= length <= 220
+    return 40 <= length <= 120
 
 
 def _quote_user_text(text: str) -> str:
@@ -78,6 +78,9 @@ def build_prompt(
         persona_text += f"\nこの人格固有の論点（必ず使え）: {', '.join(unique_args)}"
     if sig_phrases:
         persona_text += f"\n決め台詞の文体（参考）: {' / '.join(sig_phrases)}"
+    preferred = persona.get("preferred_terms", [])
+    if preferred:
+        persona_text += f"\n優先語彙（これらの語を発言に含めること）: {', '.join(preferred)}"
 
     target = context.get("target_post", {})
     topic_text = _quote_user_text(str(context.get("thread_topic", "")))
@@ -93,6 +96,9 @@ def build_prompt(
 直近要約(引用テキスト): {summary_text}
 参考知識:
 {chr(10).join(f'- {chunk}' for chunk in rag_chunks) if rag_chunks else '- 参照なし'}"""
+    recent_self = context.get("recent_self_contents", [])
+    if recent_self:
+        context_text += "\n直前の自分の発言（これと同じ内容・表現を繰り返すな）:\n" + "\n".join(f"- {c}" for c in recent_self)
     if retry_hint:
         context_text += f"\n修正指示: {retry_hint}"
 

@@ -429,6 +429,28 @@ class DatabaseClient:
             )
         return [_row_to_dict(row) or {} for row in rows]
 
+    async def sync_agents_from_disk(self, agents_data: list[dict[str, Any]]) -> None:
+        """Upsert agents from persona.json files; preserves existing enabled flag."""
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            for agent in agents_data:
+                persona_str = json.dumps(agent, ensure_ascii=False)
+                await conn.execute(
+                    """
+                    INSERT INTO agents (id, display_name, label, persona_json, enabled)
+                    VALUES ($1, $2, $3, $4::jsonb, TRUE)
+                    ON CONFLICT (id) DO UPDATE
+                        SET display_name = EXCLUDED.display_name,
+                            label = EXCLUDED.label,
+                            persona_json = EXCLUDED.persona_json,
+                            updated_at = NOW()
+                    """,
+                    agent["id"],
+                    agent["display_name"],
+                    agent["label"],
+                    persona_str,
+                )
+
     async def admin_update_agent(
         self,
         agent_id: str,

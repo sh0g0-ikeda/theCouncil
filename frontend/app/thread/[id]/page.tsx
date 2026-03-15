@@ -21,6 +21,7 @@ export default function ThreadPage() {
   const { data: session } = useSession();
   const [thread, setThread] = useState<ThreadSummary | null>(null);
   const isOwner = !!session?.user?.id && !!thread?.owner_x_id && session.user.id === thread.owner_x_id;
+  const PHASE_LABELS: Record<number, string> = { 1: "定義", 2: "対立", 3: "深化", 4: "転換", 5: "収束" };
   const [posts, setPosts] = useState<PostRecord[]>([]);
   const [input, setInput] = useState("");
   const [error, setError] = useState("");
@@ -149,6 +150,11 @@ export default function ThreadPage() {
             <h1 className="text-xl font-bold text-board-ink">{thread.topic}</h1>
             <p className="mt-2 text-sm leading-6 text-board-muted">
               {thread.agent_ids.join(" / ")} ・ {posts.length} レス ・ 状態 {thread.state}
+              {thread.current_phase != null && (
+                <span className="ml-2 rounded-full bg-board-accent/10 px-2 py-0.5 text-xs font-medium text-board-accent">
+                  {PHASE_LABELS[thread.current_phase] ?? `P${thread.current_phase}`}フェーズ
+                </span>
+              )}
             </p>
           </div>
           <SpeedControl value={thread.speed_mode ?? "normal"} onChange={updateSpeed} />
@@ -164,11 +170,11 @@ export default function ThreadPage() {
           placeholder="議論に参加（100〜220文字）"
           value={input}
           onChange={(event) => setInput(event.target.value)}
-          maxLength={220}
+          maxLength={400}
         />
         <div className="mt-3 flex items-center justify-between gap-4">
           <div className="text-xs text-board-muted">
-            {input.length} / 220 {input.length < 100 && !isOwner ? "・100文字以上が必要です" : ""}
+            {input.length} / 220 {input.length < 30 && !isOwner ? "・30文字以上必要" : ""}
             {error ? <span className="ml-3 text-board-warn">{error}</span> : null}
           </div>
           <button

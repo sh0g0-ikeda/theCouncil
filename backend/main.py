@@ -17,7 +17,7 @@ from api.posts import router as posts_router
 from api.threads import router as threads_router
 from db.client import get_db
 from environment import is_production_environment
-from engine.discussion import load_agents
+from engine.discussion import agents, load_agents
 from rate_limit import limiter
 from realtime import connection_manager
 
@@ -95,6 +95,10 @@ async def startup() -> None:
         raise RuntimeError("ALLOW_INSECURE_DEV_AUTH must not be enabled in production")
     await get_db().connect()
     load_agents()
+    try:
+        await get_db().sync_agents_from_disk([a.persona for a in agents.values()])
+    except Exception:
+        logger.warning("agent DB sync failed at startup", exc_info=True)
 
 
 @app.on_event("shutdown")

@@ -145,6 +145,7 @@ async def run_discussion(
             axis = select_conflict_axis(speaker_id, target_id, agents) if target_id else "rationalism"
 
             recent_posts = posts[compressed_upto:]
+            recent_contents = [p["content"] for p in posts[-3:] if p.get("agent_id") == speaker_id]
             context = {
                 "thread_topic": thread["topic"],
                 "current_tags": thread["topic_tags"],
@@ -153,6 +154,7 @@ async def run_discussion(
                 "role": _role_for_phase(phase),
                 "conversation_summary": _build_conversation_summary(compressed_summary, recent_posts),
                 "rebuttal_type": _select_rebuttal_type(speaker_id, phase),
+                "recent_self_contents": recent_contents,
             }
 
             try:
