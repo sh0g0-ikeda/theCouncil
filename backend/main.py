@@ -80,7 +80,7 @@ async def _ws_keepalive(websocket: WebSocket, interval: int = 25) -> None:
     try:
         while True:
             await asyncio.sleep(interval)
-            await websocket.send_text("ping")
+            await websocket.send_json({"type": "ping"})
     except Exception:
         pass
 

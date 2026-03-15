@@ -53,29 +53,35 @@ export default function ThreadPage() {
     };
 
     load();
+
+    // Always poll every 2s — primary delivery mechanism
+    pollRef.current = setInterval(async () => {
+      if (!active) return;
+      try {
+        const np = await apiFetch<PostRecord[]>(`/api/threads/${threadId}/posts`);
+        if (active) setPosts(np);
+      } catch {}
+    }, 2000);
+
+    // WebSocket as bonus (instant delivery when it works)
     const socket = createThreadSocket(threadId);
     socket.onmessage = (event) => {
-      const nextPost = JSON.parse(event.data) as PostRecord;
-      setPosts((current) => mergePost(current, nextPost));
+      try {
+        const data = JSON.parse(event.data);
+        if (data && typeof data === "object" && "id" in data) {
+          setPosts((current) => mergePost(current, data as PostRecord));
+        }
+      } catch {}
     };
-    const startPolling = () => {
-      if (!pollRef.current && activeRef.current) {
-        pollRef.current = setInterval(async () => {
-          try {
-            const np = await apiFetch<PostRecord[]>(`/api/threads/${threadId}/posts`);
-            if (activeRef.current) setPosts(np);
-          } catch {}
-        }, 4000);
-      }
-    };
-    socket.onerror = () => startPolling();
-    socket.onclose = () => startPolling();
 
     return () => {
       active = false;
       activeRef.current = false;
       socket.close();
-      if (pollRef.current) clearInterval(pollRef.current);
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
     };
   }, [threadId]);
 
