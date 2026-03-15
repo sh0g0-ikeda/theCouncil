@@ -62,14 +62,26 @@ class Agent:
                 )
                 continue
 
-            if validate_reply_length(reply["content"]):
-                return reply
+            if not validate_reply_length(reply["content"]):
+                last_issue = f"invalid_length:{len(reply['content'])}"
+                current_retry_hint = (
+                    f"前回の本文は{len(reply['content'])}文字だった。本文を80〜180文字に収め、"
+                    "JSONのみ出力し、used_arsenal_idも含めよ。"
+                )
+                continue
 
-            last_issue = f"invalid_length:{len(reply['content'])}"
-            current_retry_hint = (
-                f"前回の本文は{len(reply['content'])}文字だった。本文を80〜180文字に収め、"
-                "JSONのみ出力し、used_arsenal_idも含めよ。"
-            )
+            # Axis novelty gate: reject if same axis used ≥2 times recently
+            main_axis = reply.get("main_axis", "")
+            recent_axes = context.get("agent_recent_axes", [])
+            if main_axis and recent_axes.count(main_axis) >= 2 and attempt < max_attempts:
+                last_issue = f"axis_repeat:{main_axis}"
+                current_retry_hint = (
+                    f"「{main_axis}」の評価軸は直近{recent_axes.count(main_axis)}回使用済み。"
+                    "全く別の評価軸・視点で切り直せ。same axis repeating is a disqualification."
+                )
+                continue
+
+            return reply
 
         raise LLMGenerationError(
             f"Failed after {max_attempts} attempts for agent={self.id}: {last_issue}"

@@ -10,7 +10,7 @@ from typing import Any
 
 from db.client import get_db
 from engine.facilitator import make_facilitate
-from engine.llm import LLMGenerationError, assign_debate_roles, compress_history
+from engine.llm import LLMGenerationError, assign_debate_roles, compress_history, decompose_topic_axes
 from engine.debate_state import DebateState
 from engine.selector import select_conflict_axis, select_next_agent, select_silent_agent, select_target_post
 from models.agent import Agent, IdeologyVector
@@ -86,7 +86,7 @@ async def run_discussion(
                 await asyncio.sleep(2)
                 continue
 
-            # ── Role initialization (once per thread) ──────────────────────
+            # ── Role + axis initialization (once per thread) ───────────────
             if not roles_initialized:
                 agent_list = [
                     agents[aid].persona
@@ -94,12 +94,16 @@ async def run_discussion(
                     if aid in agents
                 ]
                 try:
-                    roles = await assign_debate_roles(thread["topic"], agent_list)
+                    roles, axes = await asyncio.gather(
+                        assign_debate_roles(thread["topic"], agent_list),
+                        decompose_topic_axes(thread["topic"]),
+                    )
                     debate.set_debate_roles(roles)
+                    debate.set_topic_axes(axes)
                     roles_initialized = True
-                    logger.info("debate_roles assigned for thread=%s: %s", thread_id, roles)
+                    logger.info("roles=%s axes=%s thread=%s", roles, axes, thread_id)
                 except Exception:
-                    logger.warning("assign_debate_roles failed", exc_info=True)
+                    logger.warning("role/axis init failed", exc_info=True)
                     roles_initialized = True  # don't retry on error
 
             posts = await db.fetch_posts(thread_id)
@@ -232,6 +236,8 @@ async def run_discussion(
             arsenal_novelty = debate.has_unused_arsenal(speaker_id, agents[speaker_id].persona)
             debate_role = debate.get_debate_role(speaker_id)
             forced_axis = debate.pop_forced_axis(speaker_id)
+            agent_recent_axes = debate.get_agent_recent_axes(speaker_id)
+            uncovered_axes = debate.get_uncovered_axes()
             context = {
                 "thread_topic": thread["topic"],
                 "current_tags": thread["topic_tags"],
@@ -249,6 +255,9 @@ async def run_discussion(
                 "newcomer_event": newcomer_hint,
                 "debate_role": debate_role,
                 "forced_axis": forced_axis or "",
+                "topic_axes": debate.topic_axes,
+                "agent_recent_axes": agent_recent_axes,
+                "uncovered_axes": uncovered_axes,
                 "stance_drift_warning": stance_drift,
                 "arsenal_novelty_push": arsenal_novelty,
                 "is_first_post": is_first_post,

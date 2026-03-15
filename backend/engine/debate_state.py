@@ -28,6 +28,10 @@ class DebateState:
         self.debate_roles: dict[str, str] = {}
         # Facilitator-assigned forced axis queue: [(agent_id, axis), ...]
         self.forced_axis_queue: list[tuple[str, str]] = []
+        # Evaluation axes decomposed from thread topic (set once at start)
+        self.topic_axes: list[str] = []
+        # Per-agent axis usage history (last 4 axes per agent)
+        self.agent_axis_usage: dict[str, list[str]] = {}
 
     def record_post(
         self,
@@ -51,11 +55,18 @@ class DebateState:
         # Update internal states
         self._update_internal_states(speaker_id, target_agent)
 
-        # Axis tracking
+        # Global axis tracking
         if focus_axis:
             self.recent_axes.append(focus_axis)
         if len(self.recent_axes) > 8:
             self.recent_axes.pop(0)
+
+        # Per-agent axis tracking
+        if focus_axis and speaker_id:
+            agent_axes = self.agent_axis_usage.setdefault(speaker_id, [])
+            agent_axes.append(focus_axis)
+            if len(agent_axes) > 4:
+                agent_axes.pop(0)
 
         # Debate function tracking
         if debate_function:
@@ -170,6 +181,22 @@ class DebateState:
             return False
         return len(set(self.recent_axes[-5:])) == 1
 
+    # ── Topic axes ───────────────────────────────────────────────────────────
+
+    def set_topic_axes(self, axes: list[str]) -> None:
+        self.topic_axes = axes
+
+    def get_agent_recent_axes(self, agent_id: str) -> list[str]:
+        return self.agent_axis_usage.get(agent_id, [])
+
+    def get_uncovered_axes(self) -> list[str]:
+        """Return topic axes not recently argued by anyone (last ~10 posts)."""
+        recent_global = set(self.recent_axes[-10:])
+        return [a for a in self.topic_axes if a not in recent_global]
+
+    def axes_initialized(self) -> bool:
+        return bool(self.topic_axes)
+
     # ── Role assignment ──────────────────────────────────────────────────────
 
     def set_debate_roles(self, roles: dict[str, str]) -> None:
@@ -209,6 +236,8 @@ class DebateState:
             "used_arsenal_ids": {k: list(v) for k, v in self.used_arsenal_ids.items()},
             "debate_roles": self.debate_roles,
             "forced_axis_queue": self.forced_axis_queue,
+            "topic_axes": self.topic_axes,
+            "agent_axis_usage": self.agent_axis_usage,
         }
 
     @classmethod
@@ -231,6 +260,8 @@ class DebateState:
             k: set(v) for k, v in data.get("used_arsenal_ids", {}).items()
         }
         instance.debate_roles = data.get("debate_roles", {})
+        instance.topic_axes = data.get("topic_axes", [])
+        instance.agent_axis_usage = {k: list(v) for k, v in data.get("agent_axis_usage", {}).items()}
         instance.forced_axis_queue = [
             (item[0], item[1]) for item in data.get("forced_axis_queue", [])
             if isinstance(item, (list, tuple)) and len(item) == 2

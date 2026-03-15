@@ -19,6 +19,14 @@ SYSTEM_PROMPT = """あなたは議論掲示板のAI人格である。なんJ・5
 - concretize: 現代の具体的制度・事例・数字に落として論じる
 - synthesize: 双方が合意できる点か、絶対に合意不能な核心的対立軸を一つ明示する
 
+【思想的機能ルール】
+あなたは口調の違いではなく「世界の切り方」の違いで他者と差別化される分析器だ。
+発言は以下のいずれかの論法構造を取れ（単なる「反対意見の言い換え」は失格）：
+- 前提暴き: 相手の評価軸・基準そのものが偏っていることを示す
+- 視点転換: 同じ事象を自分だけの原理（権力/所有/人間性/歴史/制度論理）から見直す
+- 具体接地: 抽象論を特定の制度・数字・歴史的事例に降ろして検証不能にさせない
+- 逆説呈示: 相手の主張が招く逆説・副作用・歴史的失敗例を突きつける
+
 【口調ルール】
 - なんJ・5ch風の砕けた口語体で書け
 - 「〜やろ」「〜やん」「〜やんけ」「〜ぞ」「〜やで」「〜なんよ」「ンゴ」「ぐうわか」「ガチで」等を自然に混ぜろ
@@ -31,8 +39,8 @@ SYSTEM_PROMPT = """あなたは議論掲示板のAI人格である。なんJ・5
 - stanceが "agree" や "supplement" を連続で出すな。立場崩壊は失格
 
 【論点新規性ルール】
-- 【使用済み論点】と同じ切り口・根拠・事例は絶対に繰り返すな
-- 必ず新しい視点（別の事例・歴史的事実・数字・思考実験・比喩）を持ち込め
+- 【自分の使用済み軸】と同じ評価軸・切り口・事例は繰り返すな
+- 【まだ誰も触れていない軸】がある場合は必ずそこから切り込め
 - 【他者の直近論点】と同じ土俵に乗るな。独自の角度で切れ
 
 【絶対ルール・違反は即失格】
@@ -43,7 +51,7 @@ SYSTEM_PROMPT = """あなたは議論掲示板のAI人格である。なんJ・5
 5. 差別的発言・犯罪助長・個人攻撃は禁止。
 
 JSONのみ出力:
-{"stance": "<disagree|agree|supplement|shift>", "main_axis": "<軸名>", "content": "<本文>", "used_arsenal_id": "<使った武器id|null>"}"""
+{"stance": "<disagree|agree|supplement|shift>", "main_axis": "<使った評価軸>", "content": "<本文>", "used_arsenal_id": "<使った武器id|null>"}"""
 
 # Phase-specific directives injected into the user prompt
 _PHASE_DIRECTIVES: dict[int, str] = {
@@ -145,9 +153,22 @@ def build_prompt(
 
     phase_directive = _PHASE_DIRECTIVES.get(phase, "")
 
+    # Evaluation axes for this topic
+    topic_axes = context.get("topic_axes", [])
+    agent_recent_axes = context.get("agent_recent_axes", [])
+    uncovered_axes = context.get("uncovered_axes", [])
+
+    axes_line = ""
+    if topic_axes:
+        axes_line = f"\n評価軸: {' / '.join(topic_axes)}"
+    if agent_recent_axes:
+        axes_line += f"\n⛔ 自分の使用済み軸（今回禁止）: {' / '.join(agent_recent_axes[-2:])}"
+    if uncovered_axes:
+        axes_line += f"\n💡 誰も触れていない軸（優先して切り込め）: {' / '.join(uncovered_axes[:3])}"
+
     context_text = f"""{fn_line}{phase_directive}
 テーマ(厳守): {topic_text}
-論点タグ: {', '.join(context.get('current_tags', []))}
+論点タグ: {', '.join(context.get('current_tags', []))}{axes_line}
 返信先#{target.get('id', '?')}({target.get('display_name') or target.get('agent_id') or '名無し'}): {target_text}
 衝突軸: {context.get('conflict_axis', '')}／役割: {context.get('role', 'counter')}
 要約: {summary_text}
@@ -355,3 +376,39 @@ async def assign_debate_roles(
         for i, agent in enumerate(agent_list):
             roles[agent["id"]] = ["pro", "con", "neutral"][i % 3]
         return roles
+
+
+async def decompose_topic_axes(topic: str) -> list[str]:
+    """Decompose a debate topic into 4-6 evaluation axes.
+
+    Each axis is a named perspective from which the topic can be judged.
+    E.g. "自由の保護", "権力濫用の防止", "経済効率", "民意反映".
+    """
+    if not os.getenv("OPENAI_API_KEY"):
+        return ["効率性", "公平性", "権力抑制", "多様性", "歴史的実績", "危機対応能力"]
+
+    try:
+        response = await _get_client().chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "議題を哲学・政治・社会的に議論するための評価軸を4〜6個生成せよ。"
+                        "評価軸とは「この議題の優劣を何の観点で測るか」という問いの枠組み。"
+                        "例: 自由の保護、権力濫用の防止、経済効率、民意反映、危機対応能力、歴史的実績。"
+                        "短い日本語の名詞句で。"
+                        '形式: {"axes": ["軸1", "軸2", ...]}'
+                    ),
+                },
+                {"role": "user", "content": topic},
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=150,
+            temperature=0.3,
+        )
+        payload = json.loads(response.choices[0].message.content or "{}")
+        axes = [str(a) for a in payload.get("axes", [])]
+        return axes[:6] or ["効率性", "公平性", "権力抑制", "多様性", "歴史的実績", "危機対応能力"]
+    except Exception:
+        return ["効率性", "公平性", "権力抑制", "多様性", "歴史的実績", "危機対応能力"]
