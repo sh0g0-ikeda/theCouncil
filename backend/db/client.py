@@ -264,12 +264,12 @@ class DatabaseClient:
                 SELECT
                     t.*,
                     u.email AS owner_email,
+                    u.x_id AS owner_x_id,
                     COALESCE(COUNT(p.id), 0)::int AS post_count
-                    u.x_id AS owner_x_id
                 FROM threads t
                 LEFT JOIN users u ON u.id = t.user_id
                 LEFT JOIN posts p ON p.thread_id = t.id AND p.deleted_at IS NULL
-                GROUP BY t.id, u.email
+                GROUP BY t.id, u.email, u.x_id
                 ORDER BY t.created_at DESC
                 LIMIT 100
                 """
