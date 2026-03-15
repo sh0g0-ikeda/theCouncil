@@ -434,12 +434,13 @@ class DatabaseClient:
         return [_row_to_dict(row) or {} for row in rows]
 
     async def sync_agents_from_disk(self, agents_data: list[dict[str, Any]]) -> None:
-        """Upsert agents from persona.json files; preserves existing enabled flag."""
+        """Upsert agents from persona.json files; disable agents removed from disk."""
         _VECTOR_KEYS = [
             "state_control", "tech_optimism", "rationalism", "power_realism",
             "individualism", "moral_universalism", "future_orientation",
         ]
         pool = await self._ensure_pool()
+        disk_ids = {agent["id"] for agent in agents_data}
         async with pool.acquire() as conn:
             for agent in agents_data:
                 persona_str = json.dumps(agent, ensure_ascii=False)
@@ -462,6 +463,11 @@ class DatabaseClient:
                     persona_str,
                     vector,
                 )
+            # Disable any DB agents whose persona.json no longer exists on disk
+            await conn.execute(
+                "UPDATE agents SET enabled = FALSE WHERE id <> ALL($1::text[])",
+                list(disk_ids),
+            )
 
     async def load_debate_state(self, thread_id: str) -> dict | None:
         pool = await self._ensure_pool()
