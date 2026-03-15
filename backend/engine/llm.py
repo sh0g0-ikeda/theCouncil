@@ -138,10 +138,12 @@ def build_prompt(
 
     # Available arsenal items (not on cooldown)
     available_arsenal: list[dict[str, Any]] = context.get("available_arsenal", [])
+    has_mission = bool(context.get("private_directive", ""))
     if available_arsenal:
         desc_list = [f"[{a['id']}]{a['desc']}" for a in available_arsenal[:4]]
         persona_text += f"使える武器: {' / '.join(desc_list)}"
-        if context.get("arsenal_novelty_push"):
+        # Suppress arsenal push when Director has already assigned a mission (1-post-1-mission)
+        if context.get("arsenal_novelty_push") and not has_mission:
             persona_text += "  ← 今回はこのうち未使用のものを必ず使え"
 
     # ── Context block ─────────────────────────────────────────────────────────
@@ -173,10 +175,20 @@ def build_prompt(
     if uncovered_axes:
         axes_line += f"\n💡 誰も触れていない軸（優先して切り込め）: {' / '.join(uncovered_axes[:3])}"
 
+    # Premise-extraction instruction for attack/steelman functions
+    rebut_procedure = ""
+    if debate_fn in {"attack", "steelman"} and target_content:
+        rebut_procedure = (
+            "\n→ 【反駁手順・必須】"
+            "①上の発言が成り立つ前提を1つだけ特定する "
+            "②「つまり〜という前提があるはずだ」と明示する "
+            "③その前提の弱点だけを一点で崩す。複数指摘は失格。"
+        )
+
     context_text = f"""{fn_line}{phase_directive}
 テーマ(厳守): {topic_text}
 論点タグ: {', '.join(context.get('current_tags', []))}{axes_line}
-返信先#{target.get('id', '?')}({target.get('display_name') or target.get('agent_id') or '名無し'}): {target_text}
+返信先#{target.get('id', '?')}({target.get('display_name') or target.get('agent_id') or '名無し'}): {target_text}{rebut_procedure}
 衝突軸: {context.get('conflict_axis', '')}／役割: {context.get('role', 'counter')}
 要約: {summary_text}
 知識: {chr(10).join(f'- {chunk}' for chunk in rag_chunks) if rag_chunks else 'なし'}"""
@@ -195,17 +207,22 @@ def build_prompt(
             s = _re.sub(r'ンゴ+', '', s)
             return s.strip()
         context_text += "\n【他者の直近論点（完全禁止：同じ論点・同じ具体例・同じ固有名詞・同じ角度はすべて禁止。内容・事例・切り口を完全に独自にせよ）】\n" + "\n".join(f"- {_strip_style(c)[:80]}" for c in recent_others)
-    if context.get("stance_drift_warning"):
-        context_text += "\n⚠️ 立場崩壊警告：直近で agree/supplement が続いた。今回は必ず disagree か shift で自分の立場を明確に出せ。"
-    if context.get("stagnation"):
-        context_text += "\n⚠️ 議論停滞中：まったく別の事例・数字・歴史・思考実験で強制的に打開せよ"
+    # 1-post-1-mission: suppress optional signals when Director has assigned a mission
+    if not has_mission:
+        if context.get("stance_drift_warning"):
+            context_text += "\n⚠️ 立場崩壊警告：直近で agree/supplement が続いた。今回は必ず disagree か shift で自分の立場を明確に出せ。"
+        if context.get("stagnation"):
+            context_text += "\n⚠️ 議論停滞中：まったく別の事例・数字・歴史・思考実験で強制的に打開せよ"
+        if context.get("newcomer_event"):
+            context_text += "\n🆕 新規割込み：誰も触れていない角度で入れ"
     if context.get("is_first_post"):
         context_text += "\n🔰 初投稿：①テーマへの自分の結論を一言で断言（例：「正当化できる」「できない」）→②その判断基準を明示（国際法・リアリズム・倫理など）→③歴史的根拠を1つ挙げよ。この順で書け。抽象論から入るな。"
-    if context.get("newcomer_event"):
-        context_text += "\n🆕 新規割込み：誰も触れていない角度で入れ"
     forced_axis = context.get("forced_axis", "")
     if forced_axis:
         context_text += f"\n🎯 【ファシリ指定軸】今回は「{forced_axis}」の観点だけで論じよ。他の軸に逸れるな。"
+    active_constraint = context.get("active_constraint", "")
+    if active_constraint:
+        context_text += f"\n⚠️ 【議場制約・現在有効】{active_constraint}"
     if context.get("user_post_reply"):
         context_text += "\n👤 返信先はユーザー投稿：ユーザーの発言も論破・再定義の対象。「〜は当然」「〜は悪い」等の自明命題でもその前提・定義・適用範囲を問い、あなたの独自の論理で斬り直せ。受け入れてはいけない。"
     if context.get("moral_suction_warning"):

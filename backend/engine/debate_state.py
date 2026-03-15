@@ -38,6 +38,11 @@ class DebateState:
         self.open_attacks: list[tuple[str, str, str]] = []
         # Per-agent agreement streak (consecutive agree/supplement count)
         self.agreement_streak: dict[str, int] = {}
+        # Axis depth: axis -> "introduced"|"contested"|"rebutted"|"synthesized"
+        self.axis_depth: dict[str, str] = {}
+        # Facilitator active constraint: declared "next N posts must X"
+        self.active_constraint: str = ""
+        self.constraint_turns: int = 0
 
     def record_post(
         self,
@@ -83,6 +88,7 @@ class DebateState:
         # Global axis tracking
         if focus_axis:
             self.recent_axes.append(focus_axis)
+            self._deepen_axis(focus_axis, debate_function, stance)
         if len(self.recent_axes) > 8:
             self.recent_axes.pop(0)
 
@@ -277,6 +283,45 @@ class DebateState:
                 return (attacker_id, snippet)
         return None
 
+    # ── Axis depth (introduced → contested → rebutted → synthesized) ─────────
+
+    def _deepen_axis(self, axis: str, debate_fn: str, stance: str) -> None:
+        current = self.axis_depth.get(axis, "introduced")
+        if current == "synthesized":
+            return
+        if debate_fn in {"attack", "steelman"}:
+            if current == "introduced":
+                self.axis_depth[axis] = "contested"
+            elif current == "contested":
+                self.axis_depth[axis] = "rebutted"
+        elif debate_fn == "synthesize" and current in {"contested", "rebutted"}:
+            self.axis_depth[axis] = "synthesized"
+
+    def get_shallow_axes(self) -> list[str]:
+        """Return topic axes used by at least one agent but not yet contested."""
+        discussed = {a for axes in self.agent_axis_usage.values() for a in axes}
+        return [
+            a for a in self.topic_axes
+            if a in discussed and self.axis_depth.get(a, "introduced") == "introduced"
+        ]
+
+    # ── Facilitator active constraint ─────────────────────────────────────────
+
+    def set_facilitator_constraint(self, constraint: str, turns: int = 2) -> None:
+        self.active_constraint = constraint
+        self.constraint_turns = turns
+
+    def consume_constraint(self) -> str:
+        """Return active constraint text and decrement counter. Returns '' if none."""
+        if not self.active_constraint or self.constraint_turns <= 0:
+            return ""
+        result = self.active_constraint
+        self.constraint_turns -= 1
+        if self.constraint_turns <= 0:
+            self.active_constraint = ""
+            self.constraint_turns = 0
+        return result
+
     def to_dict(self) -> dict:
         return {
             "anger": [[k[0], k[1], v] for k, v in self.anger.items()],
@@ -294,6 +339,9 @@ class DebateState:
             "agent_directives": self.agent_directives,
             "open_attacks": [list(t) for t in self.open_attacks],
             "agreement_streak": self.agreement_streak,
+            "axis_depth": self.axis_depth,
+            "active_constraint": self.active_constraint,
+            "constraint_turns": self.constraint_turns,
         }
 
     @classmethod
@@ -339,4 +387,7 @@ class DebateState:
             if isinstance(item, (list, tuple)) and len(item) == 3
         ]
         instance.agreement_streak = {k: int(v) for k, v in data.get("agreement_streak", {}).items()}
+        instance.axis_depth = {str(k): str(v) for k, v in data.get("axis_depth", {}).items()}
+        instance.active_constraint = str(data.get("active_constraint", ""))
+        instance.constraint_turns = int(data.get("constraint_turns", 0))
         return instance

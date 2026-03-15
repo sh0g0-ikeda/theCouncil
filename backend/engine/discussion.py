@@ -116,8 +116,25 @@ def _run_director(
                 )
                 continue
 
-        # Priority 4: introduce_new_axis — uncovered topic axes
-        if uncovered_axes:
+        # Priority 4: deepen_shallow_axis — contest an introduced-but-unrebutted axis
+        shallow = debate.get_shallow_axes()
+        if shallow:
+            axis_to_contest = shallow[0]
+            # Prefer bots that did NOT introduce this axis (someone else contests it)
+            introducer = next(
+                (aid for aid, axes in debate.agent_axis_usage.items() if axis_to_contest in axes),
+                None,
+            )
+            if agent_id != introducer:
+                debate.push_directive(
+                    agent_id,
+                    f"MISSION:deepen_axis｜「{axis_to_contest}」が誰にも反論されていない。"
+                    f"この軸の主張の根幹前提を1つだけ特定し、その前提の弱点を一点で崩せ。",
+                )
+                continue
+
+        # Priority 5: introduce_new_axis — only if no shallow axes exist
+        if not shallow and uncovered_axes:
             agent_recent = set(debate.get_agent_recent_axes(agent_id))
             candidates = [a for a in uncovered_axes if a not in agent_recent]
             if candidates:
@@ -127,7 +144,7 @@ def _run_director(
                 )
                 continue
 
-        # Priority 5: use_weapon — deploy unused arsenal item
+        # Priority 6: use_weapon — deploy unused arsenal item
         if debate.has_unused_arsenal(agent_id, persona):
             available = debate.get_available_arsenal(agent_id, persona)
             used = debate.used_arsenal_ids.get(agent_id, set())
@@ -296,6 +313,12 @@ async def run_discussion(
                     ax_assignments = facilitate.get("axis_assignments", [])
                     if ax_assignments:
                         debate.push_axis_assignments(ax_assignments)
+                    # Store facilitator constraint (next N posts must...)
+                    constraint_text = str(facilitate.get("constraint", "")).strip()
+                    if constraint_text:
+                        debate.set_facilitator_constraint(
+                            constraint_text, int(facilitate.get("constraint_turns", 2))
+                        )
                     post = await db.save_post(
                         thread_id,
                         None,
@@ -383,6 +406,7 @@ async def run_discussion(
             debate_role = debate.get_debate_role(speaker_id)
             forced_axis = debate.pop_forced_axis(speaker_id)
             private_directive = debate.pop_directive(speaker_id)
+            active_constraint = debate.consume_constraint()
             agent_recent_axes = debate.get_agent_recent_axes(speaker_id)
             uncovered_axes = debate.get_uncovered_axes()
             is_user_post_reply = (user_reply_pending > 0 and target is not None and target.get("user_id") is not None)
@@ -405,6 +429,7 @@ async def run_discussion(
                 "debate_role": debate_role,
                 "forced_axis": forced_axis or "",
                 "private_directive": private_directive or "",
+                "active_constraint": active_constraint or "",
                 "topic_axes": debate.topic_axes,
                 "agent_recent_axes": agent_recent_axes,
                 "uncovered_axes": uncovered_axes,
