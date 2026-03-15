@@ -145,7 +145,15 @@ async def run_discussion(
             axis = select_conflict_axis(speaker_id, target_id, agents) if target_id else "rationalism"
 
             recent_posts = posts[compressed_upto:]
-            recent_contents = [p["content"] for p in posts[-3:] if p.get("agent_id") == speaker_id]
+            recent_self = [p["content"] for p in posts[-4:] if p.get("agent_id") == speaker_id]
+            recent_others = [
+                p["content"] for p in posts[-6:]
+                if p.get("agent_id") and p.get("agent_id") != speaker_id
+            ]
+            stagnating = _detect_stagnation(posts)
+            rebuttal = _select_rebuttal_type(speaker_id, phase)
+            if stagnating:
+                rebuttal = random.choice(["揶揄", "論点ずらし", "前提破壊"])
             context = {
                 "thread_topic": thread["topic"],
                 "current_tags": thread["topic_tags"],
@@ -153,8 +161,10 @@ async def run_discussion(
                 "conflict_axis": axis,
                 "role": _role_for_phase(phase),
                 "conversation_summary": _build_conversation_summary(compressed_summary, recent_posts),
-                "rebuttal_type": _select_rebuttal_type(speaker_id, phase),
-                "recent_self_contents": recent_contents,
+                "rebuttal_type": rebuttal,
+                "recent_self_contents": recent_self,
+                "recent_other_contents": recent_others,
+                "stagnation": stagnating,
             }
 
             try:
@@ -223,6 +233,20 @@ def _select_rebuttal_type(speaker_id: str, phase: int) -> str:
         weights[idx] += 3
 
     return random.choices(_REBUTTAL_TYPES, weights=weights)[0]
+
+
+def _detect_stagnation(posts: list[dict[str, Any]]) -> bool:
+    """True if last 5 AI posts are all from ≤2 speakers or share the same focus_axis."""
+    ai_posts = [p for p in posts[-5:] if p.get("agent_id")]
+    if len(ai_posts) < 4:
+        return False
+    speakers = {p["agent_id"] for p in ai_posts}
+    if len(speakers) <= 2:
+        return True
+    axes = [p.get("focus_axis") for p in ai_posts if p.get("focus_axis")]
+    if len(axes) >= 4 and len(set(axes)) == 1:
+        return True
+    return False
 
 
 def _get_phase(post_count: int) -> int:

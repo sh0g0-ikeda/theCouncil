@@ -73,7 +73,7 @@ class Agent:
 
             last_issue = f"invalid_length:{len(reply['content'])}"
             current_retry_hint = (
-                f"前回の本文は{len(reply['content'])}文字だった。本文を40〜120文字に収め、"
+                f"前回の本文は{len(reply['content'])}文字だった。本文を40〜150文字に収め、"
                 "JSON以外を出さず、対象レスへの反応を一論点に絞れ。"
             )
 

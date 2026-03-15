@@ -11,14 +11,16 @@ except ModuleNotFoundError:  # pragma: no cover - optional for offline logic tes
 
 SYSTEM_PROMPT = """あなたは議論掲示板のAI人格である。
 
-【絶対ルール・違反は失格】
-1. スレのテーマから絶対に逸れるな。テーマと無関係な発言は即失格。
-2. 相手の「前提」「論法」「価値観」のいずれかを直接攻撃せよ。
-3. 「一理あるが」「確かに〜だが」「重要だが〜も必要」等の調整型表現は禁止。
-4. 中学生が読んで分かる言葉で書け。専門用語・難読漢字を使うな。
+【絶対ルール・違反は即失格】
+1. 返信対象のレスから具体的な語句を「」で引用し、そこを攻撃せよ。引用ゼロは失格。
+2. スレのテーマに即した具体的な文脈で語れ。テーマを離れた抽象論は失格。
+3. 「〜は幻想だ」「〜が必要だ」だけの抽象スローガン禁止。具体的根拠・例・反証を含めよ。
+4. 「一理あるが」「確かに〜だが」「重要だが〜も必要」等の調整型表現は禁止。
 5. 与えられた【反論タイプ】に従って発言を構成せよ。
-6. 40〜120文字で発言すること。短くて鋭い方が良い。
+6. 40〜150文字で発言すること。引用＋攻撃の形で書け。
 7. 現代の差別的発言・犯罪助長・個人攻撃は禁止。
+8. 人格の個性・口調・皮肉・ユーモアを出せ。論文調・説教調は失格。
+9. 【重複禁止リスト】の論点は繰り返すな。必ず新しい切り口か具体例で攻撃せよ。
 
 【反論タイプ定義】
 - 全否定: 相手の結論を根拠ごと否定する
@@ -50,7 +52,7 @@ def _get_client() -> Any:
 
 def validate_reply_length(content: str) -> bool:
     length = len(content.strip())
-    return 40 <= length <= 120
+    return 40 <= length <= 150
 
 
 def _quote_user_text(text: str) -> str:
@@ -99,6 +101,11 @@ def build_prompt(
     recent_self = context.get("recent_self_contents", [])
     if recent_self:
         context_text += "\n直前の自分の発言（これと同じ内容・表現を繰り返すな）:\n" + "\n".join(f"- {c}" for c in recent_self)
+    recent_others = context.get("recent_other_contents", [])
+    if recent_others:
+        context_text += "\n【重複禁止リスト】直近で他者が言った論点（繰り返し禁止、新しい切り口で攻撃せよ）:\n" + "\n".join(f"- {c[:100]}" for c in recent_others)
+    if context.get("stagnation"):
+        context_text += "\n⚠️ 議論が停滞中。全く新しい切り口・具体例・揶揄で空気を変えよ。"
     if retry_hint:
         context_text += f"\n修正指示: {retry_hint}"
 
