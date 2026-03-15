@@ -432,9 +432,8 @@ class DatabaseClient:
     async def sync_agents_from_disk(self, agents_data: list[dict[str, Any]]) -> None:
         """Upsert agents from persona.json files; preserves existing enabled flag."""
         _VECTOR_KEYS = [
-            "tech_optimism", "state_intervention", "market_trust", "order_preference",
-            "individualism", "rationalism", "power_affirmation", "moral_universalism",
-            "strategic_aggression", "future_orientation",
+            "state_control", "tech_optimism", "rationalism", "power_realism",
+            "individualism", "moral_universalism", "future_orientation",
         ]
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
@@ -459,6 +458,33 @@ class DatabaseClient:
                     persona_str,
                     vector,
                 )
+
+    async def load_debate_state(self, thread_id: str) -> dict | None:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT state_json FROM thread_debate_states WHERE thread_id = $1",
+                thread_id,
+            )
+        if row is None:
+            return None
+        raw = row["state_json"]
+        return dict(raw) if raw else None
+
+    async def save_debate_state(self, thread_id: str, state: dict) -> None:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO thread_debate_states (thread_id, state_json)
+                VALUES ($1, $2::jsonb)
+                ON CONFLICT (thread_id) DO UPDATE
+                    SET state_json = EXCLUDED.state_json,
+                        updated_at = NOW()
+                """,
+                thread_id,
+                json.dumps(state, ensure_ascii=False),
+            )
 
     async def admin_update_agent(
         self,

@@ -39,15 +39,12 @@
     "個人攻撃"
   ],
   "ideology_vector": {
+    "state_control": 3,
     "tech_optimism": 0,
-    "state_intervention": 3,
-    "market_trust": 0,
-    "order_preference": 2,
-    "individualism": -1,
     "rationalism": 3,
-    "power_affirmation": 4,
-    "moral_universalism": -3,
-    "strategic_aggression": 4,
-    "future_orientation": 1
+    "power_realism": 5,
+    "individualism": 1,
+    "moral_universalism": -4,
+    "future_orientation": 0
   }
 }

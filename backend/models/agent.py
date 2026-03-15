@@ -6,28 +6,22 @@ from typing import Any
 
 @dataclass(slots=True)
 class IdeologyVector:
-    tech_optimism: int
-    state_intervention: int
-    market_trust: int
-    order_preference: int
-    individualism: int
-    rationalism: int
-    power_affirmation: int
-    moral_universalism: int
-    strategic_aggression: int
-    future_orientation: int
+    state_control: int        # -5=自由市場/無政府 ↔ +5=国家統制
+    tech_optimism: int        # -5=技術悲観 ↔ +5=テクノ楽観
+    rationalism: int          # -5=直感/神秘 ↔ +5=純粋理性/実証
+    power_realism: int        # -5=理想主義/平和主義 ↔ +5=現実政治/武力
+    individualism: int        # -5=急進的集団主義 ↔ +5=急進的個人主義
+    moral_universalism: int   # -5=ニヒリズム/相対主義 ↔ +5=普遍道徳
+    future_orientation: int   # -5=保守/伝統回帰 ↔ +5=急進的進歩主義
 
     def as_list(self) -> list[int]:
         return [
+            self.state_control,
             self.tech_optimism,
-            self.state_intervention,
-            self.market_trust,
-            self.order_preference,
-            self.individualism,
             self.rationalism,
-            self.power_affirmation,
+            self.power_realism,
+            self.individualism,
             self.moral_universalism,
-            self.strategic_aggression,
             self.future_orientation,
         ]
 

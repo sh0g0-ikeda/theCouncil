@@ -65,7 +65,8 @@ async def run_discussion(
     last_post_count = -1
     user_reply_pending = 0
     last_user_post_id: int | None = None
-    debate = DebateState()
+    saved_state = await db.load_debate_state(thread_id)
+    debate = DebateState.from_dict(saved_state) if saved_state else DebateState()
     last_speaker_id: str | None = None
     event_counter = 0
 
@@ -246,6 +247,8 @@ async def run_discussion(
             if user_reply_pending > 0:
                 user_reply_pending -= 1
             await push_fn(thread_id, post)
+            if event_counter % 5 == 0:
+                await db.save_debate_state(thread_id, debate.to_dict())
             await asyncio.sleep(SPEED.get(thread["speed_mode"], 5.0))
     finally:
         _discussion_tasks.pop(thread_id, None)

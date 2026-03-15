@@ -9,15 +9,12 @@ GAMMA = 0.25
 DELTA = 0.15
 
 AXES = [
+    "state_control",
     "tech_optimism",
-    "state_intervention",
-    "market_trust",
-    "order_preference",
-    "individualism",
     "rationalism",
-    "power_affirmation",
+    "power_realism",
+    "individualism",
     "moral_universalism",
-    "strategic_aggression",
     "future_orientation",
 ]
 
@@ -80,9 +77,12 @@ def select_next_agent(
         if agent_id == last_agent_id or agent_id in excluded_agent_ids:
             continue
         agent = agents[agent_id]
-        opposition = (agent.vector.manhattan_distance(last_vector) / 50.0) if last_vector else 0.5
+        opposition = (agent.vector.manhattan_distance(last_vector) / 70.0) if last_vector else 0.5
         silence_bonus = max(0.0, (avg_count - post_counts[agent_id]) / avg_count) if avg_count > 0 else 0.0
-        persona_text = " ".join(agent.persona.get("core_beliefs", []) + agent.persona.get("values", []))
+        persona_text = " ".join(
+            agent.persona.get("worldview", agent.persona.get("core_beliefs", []))
+            + agent.persona.get("combat_doctrine", agent.persona.get("values", []))
+        )
         topic_match = sum(1 for tag in current_tags if tag in persona_text) / max(len(current_tags), 1)
         diversity = 0.0 if agent_id in recent_agents else 1.0
         scores[agent_id] = (

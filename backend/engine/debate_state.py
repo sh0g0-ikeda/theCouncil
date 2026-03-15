@@ -130,3 +130,30 @@ class DebateState:
         if len(self.recent_axes) < 5:
             return False
         return len(set(self.recent_axes[-5:])) == 1
+
+    def to_dict(self) -> dict:
+        return {
+            "anger": {f"{k[0]}\x00{k[1]}": v for k, v in self.anger.items()},
+            "retaliation_queue": self.retaliation_queue,
+            "recent_axes": self.recent_axes,
+            "internal_states": self.internal_states,
+            "arsenal_cooldowns": self.arsenal_cooldowns,
+            "recent_functions": self.recent_functions,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "DebateState":
+        instance = cls()
+        for key_str, v in data.get("anger", {}).items():
+            parts = key_str.split("\x00", 1)
+            if len(parts) == 2:
+                instance.anger[(parts[0], parts[1])] = v
+        instance.retaliation_queue = data.get("retaliation_queue", [])
+        instance.recent_axes = data.get("recent_axes", [])
+        instance.internal_states = data.get("internal_states", {})
+        instance.arsenal_cooldowns = {
+            agent: dict(cooldowns)
+            for agent, cooldowns in data.get("arsenal_cooldowns", {}).items()
+        }
+        instance.recent_functions = data.get("recent_functions", [])
+        return instance
