@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 AGENTS_DIR = ROOT / "backend" / "agents"
+EXCLUDED_PERSONA_IDS = {"kant", "turing"}
 
 AXES = [
     "tech_optimism",
@@ -332,11 +333,11 @@ def write_persona_assets(persona: dict) -> None:
 
 def main() -> None:
     AGENTS_DIR.mkdir(parents=True, exist_ok=True)
-    for persona in PERSONAS:
+    active_personas = [persona for persona in PERSONAS if persona["id"] not in EXCLUDED_PERSONA_IDS]
+    for persona in active_personas:
         write_persona_assets(persona)
-    print(f"generated {len(PERSONAS)} agent directories in {AGENTS_DIR}")
+    print(f"generated {len(active_personas)} agent directories in {AGENTS_DIR}")
 
 
 if __name__ == "__main__":
     main()
-

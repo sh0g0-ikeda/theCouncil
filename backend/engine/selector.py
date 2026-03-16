@@ -117,13 +117,25 @@ def select_next_agent(
     return random.choices(candidates, weights=weights)[0]
 
 
-def select_target_post(posts: list[dict[str, Any]], speaker_id: str, agents: dict[str, Any]) -> dict[str, Any] | None:
+def select_target_post(
+    posts: list[dict[str, Any]],
+    speaker_id: str,
+    agents: dict[str, Any],
+    debate_state: Any = None,
+) -> dict[str, Any] | None:
     """Weighted-random target selection: ideological distance as weight.
 
     Uses recency-deduplication so the same post is not targeted by consecutive
     speakers, and adds a recency bonus so recent posts are more likely targets.
     """
     speaker_vector = agents[speaker_id].vector
+
+    if debate_state is not None:
+        priority_post_id = debate_state.get_priority_post_id_for(speaker_id)
+        if priority_post_id is not None:
+            target = next((post for post in reversed(posts) if post.get("id") == priority_post_id), None)
+            if target is not None:
+                return target
 
     # Find the post that was just targeted by the previous AI speaker (to avoid pile-on)
     last_target_id: int | None = None

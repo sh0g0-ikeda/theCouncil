@@ -6,6 +6,10 @@ from pathlib import Path
 
 _chunk_cache: dict[str, list[dict]] = {}
 _token_pattern = re.compile(r"[\w\u3040-\u30ff\u3400-\u9fff]+", re.UNICODE)
+_definition_markers = ("定義", "意味", "とは", "概念", "指す")
+_history_markers = ("戦争", "危機", "革命", "条約", "選挙", "事例", "歴史", "帝国")
+_tradeoff_markers = ("コスト", "代償", "副作用", "tradeoff", "trade-off", "vs", "versus")
+_synthesis_markers = ("一方", "ただし", "しかし", "両立", "統合", "同時に")
 
 
 def _agents_dir() -> Path:
@@ -34,7 +38,45 @@ def load_chunks(agent_id: str) -> list[dict]:
 
 
 def _tokenize(text: str) -> set[str]:
-    return {token.lower() for token in _token_pattern.findall(text)}
+    return {token.lower() for token in _token_pattern.findall(text or "")}
+
+
+def _derive_retrieval_mode(context: dict) -> str:
+    mode = str(context.get("retrieval_mode", "")).strip()
+    if mode:
+        return mode
+    debate_function = str(context.get("debate_function", ""))
+    if debate_function in {"define", "differentiate"}:
+        return "definition"
+    if debate_function in {"attack", "steelman"}:
+        return "counterexample"
+    if debate_function == "concretize":
+        return "concrete"
+    if debate_function == "synthesize":
+        return "synthesis"
+    return "default"
+
+
+def _mode_bonus(mode: str, chunk: dict, pending_terms: list[str], focus_axis: str) -> float:
+    text = str(chunk.get("text", ""))
+    tags = {str(tag).lower() for tag in chunk.get("tags", [])}
+    lowered = text.lower()
+
+    if mode == "definition":
+        pending_bonus = 0.35 if any(term and term in text for term in pending_terms) else 0.0
+        marker_bonus = 0.3 if any(marker in text for marker in _definition_markers) else 0.0
+        return pending_bonus + marker_bonus
+    if mode == "counterexample":
+        history_bonus = 0.25 if any(marker in text for marker in _history_markers) else 0.0
+        axis_bonus = 0.2 if focus_axis and focus_axis.lower() in tags else 0.0
+        return history_bonus + axis_bonus
+    if mode == "concrete":
+        return 0.3 if any(marker in text for marker in _history_markers) or "example" in lowered else 0.0
+    if mode == "tradeoff":
+        return 0.35 if any(marker.lower() in lowered for marker in _tradeoff_markers) else 0.0
+    if mode == "synthesis":
+        return 0.3 if any(marker in text for marker in _synthesis_markers) else 0.0
+    return 0.0
 
 
 def retrieve_chunks(agent_id: str, context: dict, top_k: int = 4) -> list[str]:
@@ -42,15 +84,36 @@ def retrieve_chunks(agent_id: str, context: dict, top_k: int = 4) -> list[str]:
     if not chunks:
         return []
 
-    query_tags = set(context.get("current_tags", []))
-    query_text = f"{context.get('thread_topic', '')} {context.get('target_post', {}).get('content', '')}"
+    mode = _derive_retrieval_mode(context)
+    query_tags = {str(tag).lower() for tag in context.get("current_tags", [])}
+    focus_axis = str(context.get("conflict_axis", "")).strip()
+    if focus_axis:
+        query_tags.add(focus_axis.lower())
+    query_text = " ".join(
+        [
+            str(context.get("thread_topic", "")),
+            str(context.get("target_post", {}).get("content", "")),
+            str(context.get("target_claim_summary", "")),
+            " ".join(str(term) for term in context.get("pending_definition_terms", [])),
+        ]
+    )
     query_words = _tokenize(query_text)
+    pending_terms = [str(term) for term in context.get("pending_definition_terms", []) if str(term).strip()]
+    forbidden_example_keys = {str(v).lower() for v in context.get("forbidden_example_keys", []) if str(v).strip()}
 
     def score(chunk: dict) -> float:
-        tag_score = len(set(chunk.get("tags", [])) & query_tags) / max(len(query_tags), 1)
-        kw_score = len(_tokenize(chunk.get("text", "")) & query_words) / max(len(query_words), 1)
-        return tag_score * 0.6 + kw_score * 0.4
+        tags = {str(tag).lower() for tag in chunk.get("tags", [])}
+        text = str(chunk.get("text", ""))
+        words = _tokenize(text)
+        tag_score = len(tags & query_tags) / max(len(query_tags), 1)
+        keyword_score = len(words & query_words) / max(len(query_words), 1) if query_words else 0.0
+        topic_score = 0.15 if str(chunk.get("topic", "")).lower() in query_text.lower() else 0.0
+        mode_score = _mode_bonus(mode, chunk, pending_terms, focus_axis)
+        repeated_example_penalty = 0.0
+        lowered = text.lower()
+        if any(key and key in lowered for key in forbidden_example_keys):
+            repeated_example_penalty = 0.45
+        return tag_score * 0.4 + keyword_score * 0.3 + topic_score + mode_score - repeated_example_penalty
 
     ranked = sorted(chunks, key=score, reverse=True)
-    return [chunk["text"] for chunk in ranked[:top_k]]
-
+    return [str(chunk.get("text", "")) for chunk in ranked[:top_k] if str(chunk.get("text", "")).strip()]

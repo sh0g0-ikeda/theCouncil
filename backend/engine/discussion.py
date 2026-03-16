@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import random
+import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
@@ -13,6 +14,7 @@ from engine.facilitator import make_facilitate
 from engine.llm import LLMGenerationError, assign_debate_roles, compress_history, decompose_topic_axes
 from engine.debate_state import DebateState
 from engine.selector import select_conflict_axis, select_next_agent, select_silent_agent, select_target_post
+from engine.validator import SemanticPostAnalysis, summarize_target_claim
 from models.agent import Agent, IdeologyVector
 
 logger = logging.getLogger(__name__)
@@ -27,6 +29,32 @@ _MORAL_KEYWORDS = {"差別", "倫理", "道徳", "人権", "正義", "に決ま�
 def _is_moral_suction(content: str) -> bool:
     """Return True if a post is likely to pull agents into unproductive moral discourse."""
     return sum(1 for kw in _MORAL_KEYWORDS if kw in content) >= 2
+
+
+def _extract_directive_type(text: str) -> str:
+    match = re.search(r"MISSION:([a-z_]+)", text or "")
+    return match.group(1) if match else ""
+
+
+def _determine_retrieval_mode(
+    debate_function: str,
+    pending_definition_terms: list[str],
+    constraint_kind: str,
+) -> str:
+    if constraint_kind == "tradeoff":
+        return "tradeoff"
+    if constraint_kind == "refocus":
+        return "counterexample"
+    if pending_definition_terms and debate_function in {"define", "differentiate"}:
+        return "definition"
+    if debate_function in {"attack", "steelman"}:
+        return "counterexample"
+    if debate_function == "concretize":
+        return "concrete"
+    if debate_function == "synthesize":
+        return "synthesis"
+    return "default"
+
 
 SPEED = {"slow": 8.5, "normal": 3.5, "fast": 0.3, "instant": 0.1, "paused": 999.0}
 
@@ -179,7 +207,7 @@ def _needs_director(posts: list[dict[str, Any]], debate: "DebateState") -> bool:
     if len(ai_posts) < 3:
         return False
     # Always fire when unanswered attacks exist
-    if debate.open_attacks:
+    if debate.has_any_open_attacks():
         return True
     # Any agent has agreement streak >= 2
     if any(v >= 2 for v in debate.agreement_streak.values()):
@@ -203,7 +231,8 @@ def _should_facilitate(posts: list[dict[str, Any]]) -> bool:
     if not posts or posts[-1].get("is_facilitator", False):
         return False
     # Minimum gap: 5 posts since last facilitation
-    for p in posts[-5:]:
+    structural_posts = [p for p in posts if p.get("agent_id") or p.get("is_facilitator")]
+    for p in structural_posts[-5:]:
         if p.get("is_facilitator"):
             return False
     ai_posts = [p for p in posts if p.get("agent_id")]
@@ -283,6 +312,8 @@ async def run_discussion(
                     roles_initialized = True  # don't retry on error
 
             posts = await db.fetch_posts(thread_id)
+            latest_post_id = max((int(post.get("id") or 0) for post in posts), default=0)
+            debate.age_obligations(latest_post_id)
             if len(posts) != last_post_count:
                 failed_agents.clear()
                 last_post_count = len(posts)
@@ -334,7 +365,9 @@ async def run_discussion(
                     constraint_text = str(facilitate.get("constraint", "")).strip()
                     if constraint_text:
                         debate.set_facilitator_constraint(
-                            constraint_text, int(facilitate.get("constraint_turns", 2))
+                            constraint_text,
+                            int(facilitate.get("constraint_turns", 2)),
+                            str(facilitate.get("constraint_kind", "")),
                         )
                     post = await db.save_post(
                         thread_id,
@@ -394,19 +427,34 @@ async def run_discussion(
                 target = next((p for p in reversed(posts) if p["id"] == last_user_post_id), None)
                 if target is None:
                     user_reply_pending = 0
-                    target = select_target_post(posts, speaker_id, agents)
+                    target = select_target_post(posts, speaker_id, agents, debate_state=debate)
             else:
-                target = select_target_post(posts, speaker_id, agents)
+                target = select_target_post(posts, speaker_id, agents, debate_state=debate)
             target_id = target["agent_id"] if target and target.get("agent_id") else None
             axis = select_conflict_axis(speaker_id, target_id, agents) if target_id else "rationalism"
 
             # ── Debate function selection ───────────────────────────────────
             # Emotions (anger/contempt) affect prompt style only — not function selection
             stagnating = _detect_stagnation(posts, debate)
-            if stagnating:
+            next_directive = debate.peek_directive(speaker_id) or ""
+            next_constraint_kind = debate.peek_constraint_kind()
+            if (
+                stagnating
+                and not debate.has_open_attack_against(speaker_id)
+                and not debate.has_pending_definition_response(speaker_id)
+                and not next_directive
+            ):
                 debate_fn = random.choice(["concretize", "differentiate", "attack"])
             else:
-                debate_fn = _select_debate_function(speaker_id, phase, agents, debate)
+                debate_fn = _select_debate_function(
+                    speaker_id,
+                    phase,
+                    agents,
+                    debate,
+                    target=target,
+                    directive=next_directive,
+                    constraint_kind=next_constraint_kind,
+                )
 
             # ── Build context ──────────────────────────────────────────────
             recent_posts = posts[compressed_upto:]
@@ -421,11 +469,14 @@ async def run_discussion(
             stance_drift = debate.is_stance_drifting(speaker_id)
             arsenal_novelty = debate.has_unused_arsenal(speaker_id, agents[speaker_id].persona)
             debate_role = debate.get_debate_role(speaker_id)
-            forced_axis = debate.pop_forced_axis(speaker_id)
-            private_directive = debate.pop_directive(speaker_id)
-            active_constraint = debate.consume_constraint()
+            forced_axis = debate.peek_forced_axis(speaker_id)
+            private_directive = debate.peek_directive(speaker_id)
+            active_constraint, active_constraint_kind = debate.peek_constraint()
             agent_recent_axes = debate.get_agent_recent_axes(speaker_id)
             uncovered_axes = debate.get_uncovered_axes()
+            pending_definition_terms = debate.get_unresolved_terms()
+            target_claim_units = debate.get_claim_units_for_post(target.get("id") if target else None)
+            retrieval_mode = _determine_retrieval_mode(debate_fn, pending_definition_terms, active_constraint_kind)
             is_user_post_reply = (user_reply_pending > 0 and target is not None and target.get("user_id") is not None)
             target_is_moral = is_user_post_reply and _is_moral_suction(target.get("content", "") if target else "")
             context = {
@@ -447,6 +498,7 @@ async def run_discussion(
                 "forced_axis": forced_axis or "",
                 "private_directive": private_directive or "",
                 "active_constraint": active_constraint or "",
+                "active_constraint_kind": active_constraint_kind or "",
                 "topic_axes": debate.topic_axes,
                 "agent_recent_axes": agent_recent_axes,
                 "uncovered_axes": uncovered_axes,
@@ -455,6 +507,13 @@ async def run_discussion(
                 "is_first_post": is_first_post,
                 "user_post_reply": is_user_post_reply,
                 "moral_suction_warning": target_is_moral or moral_suction_active > 0,
+                "target_claim_summary": summarize_target_claim(target or {}, axis),
+                "target_claim_units": target_claim_units,
+                "pending_definition_terms": pending_definition_terms,
+                "recent_argument_fingerprints": debate.recent_argument_fingerprints[-6:],
+                "forbidden_example_keys": debate.recent_example_keys[-4:],
+                "required_response_kind": debate_fn,
+                "retrieval_mode": retrieval_mode,
             }
 
             try:
@@ -470,7 +529,9 @@ async def run_discussion(
                 await asyncio.sleep(0.1)
                 continue
 
-            focus_axis = reply.get("main_axis", axis)
+            semantic_payload = reply.get("_semantic_analysis") or {}
+            semantic_analysis = SemanticPostAnalysis.from_dict(semantic_payload)
+            focus_axis = semantic_analysis.effective_axis or reply.get("main_axis", axis)
             used_arsenal_id = reply.get("used_arsenal_id")
             arsenal_cooldown = debate.get_arsenal_cooldown_for_id(agents[speaker_id].persona, used_arsenal_id or "")
             stance = reply.get("stance", "disagree")
@@ -496,7 +557,16 @@ async def run_discussion(
                 used_arsenal_id=used_arsenal_id,
                 arsenal_cooldown=arsenal_cooldown,
                 stance=stance,
+                post_id=post["id"],
+                analysis=semantic_analysis.as_dict(),
+                content=reply["content"],
             )
+            if forced_axis:
+                debate.pop_forced_axis(speaker_id)
+            if private_directive:
+                debate.pop_directive(speaker_id)
+            if active_constraint:
+                debate.consume_constraint()
             if user_reply_pending > 0:
                 user_reply_pending -= 1
             if moral_suction_active > 0:
@@ -519,41 +589,56 @@ def _prioritize_speaker(
     agents_dict: dict[str, Any],
     excluded: set[str],
 ) -> str | None:
-    """Return highest-priority speaker based on open attacks + stance drift, or None.
-
-    Scores:
-      +3  has unanswered attack against them
-      +2  agreement streak >= 2 (stance drift)
-      +1  has unused primary arsenal
-      -2  spoke in last 2 AI posts
-      -2  repeated same axis in last 2 own posts
-    Returns None when no agent has a positive priority score (fall through to normal selection).
-    """
+    """Return a deterministic obligation-first speaker, or None."""
     last_2 = {p["agent_id"] for p in posts[-2:] if p.get("agent_id")}
-    scored: list[tuple[str, int]] = []
+    post_counts = {
+        agent_id: sum(1 for post in posts if post.get("agent_id") == agent_id)
+        for agent_id in participant_ids
+    }
+    ranked: list[tuple[tuple[int, int, int, int, str], str]] = []
     for agent_id in participant_ids:
         if agent_id not in agents_dict or agent_id in excluded:
             continue
-        score = 0
-        if debate.has_open_attack_against(agent_id):
-            score += 3
-        if debate.agreement_streak.get(agent_id, 0) >= 2:
-            score += 2
-        if debate.has_unused_arsenal(agent_id, agents_dict[agent_id].persona):
-            score += 1
-        if agent_id in last_2:
-            score -= 2
+
+        if debate.has_pending_definition_response(agent_id):
+            obligation = 5
+        elif debate.has_open_attack_against(agent_id):
+            obligation = 4
+        elif debate.peek_directive(agent_id):
+            obligation = 3
+        elif debate.get_priority_post_id_for(agent_id) is not None:
+            obligation = 2
+        elif debate.agreement_streak.get(agent_id, 0) >= 2:
+            obligation = 1
+        elif debate.has_unused_arsenal(agent_id, agents_dict[agent_id].persona):
+            obligation = 1
+        else:
+            obligation = 0
+
+        if obligation <= 0:
+            continue
+
         own_axes = debate.get_agent_recent_axes(agent_id)
-        if len(own_axes) >= 2 and own_axes[-1] == own_axes[-2]:
-            score -= 2
-        scored.append((agent_id, score))
-    if not scored:
+        recent_axis_window = own_axes[-3:]
+        if recent_axis_window:
+            from collections import Counter
+            repeated_axis_penalty = 1 if Counter(recent_axis_window).most_common(1)[0][1] >= 2 else 0
+        else:
+            repeated_axis_penalty = 0
+        recent_speaker_penalty = 1 if agent_id in last_2 else 0
+        rank = (
+            -obligation,
+            recent_speaker_penalty,
+            repeated_axis_penalty,
+            post_counts.get(agent_id, 0),
+            agent_id,
+        )
+        ranked.append((rank, agent_id))
+
+    if not ranked:
         return None
-    max_score = max(s for _, s in scored)
-    if max_score <= 0:
-        return None
-    top = [aid for aid, s in scored if s >= max_score]
-    return random.choice(top)
+    ranked.sort(key=lambda item: item[0])
+    return ranked[0][1]
 
 
 def _fallback_speaker(
@@ -577,8 +662,17 @@ def _fallback_speaker(
 _DEBATE_FUNCTIONS = ["define", "differentiate", "attack", "steelman", "concretize", "synthesize"]
 
 
-def _select_debate_function(speaker_id: str, phase: int, agents_dict: dict[str, Any], debate: Any) -> str:
-    """Select a debate function based on phase, persona preference, and overuse avoidance."""
+def _select_debate_function(
+    speaker_id: str,
+    phase: int,
+    agents_dict: dict[str, Any],
+    debate: Any,
+    *,
+    target: dict[str, Any] | None = None,
+    directive: str = "",
+    constraint_kind: str = "",
+) -> str:
+    """Select a debate function with obligation-first overrides."""
     agent = agents_dict.get(speaker_id)
     aggressiveness = 3
     preference = ""
@@ -586,6 +680,33 @@ def _select_debate_function(speaker_id: str, phase: int, agents_dict: dict[str, 
         constraints = agent.persona.get("speech_constraints", {})
         aggressiveness = constraints.get("aggressiveness") or agent.persona.get("debate_style", {}).get("aggressiveness", 3)
         preference = agent.persona.get("debate_function_preference", "")
+    has_target = bool(target and target.get("content"))
+    directive_type = _extract_directive_type(directive)
+
+    if getattr(debate, "has_pending_definition_response", None) and debate.has_pending_definition_response(speaker_id):
+        return "differentiate" if phase >= 2 or aggressiveness >= 4 else "define"
+
+    if directive_type == "rebut_core_claim":
+        return "attack" if phase >= 2 and has_target else "differentiate"
+    if directive_type == "defend_self_consistency":
+        return "differentiate" if has_target else "define"
+    if directive_type == "deepen_axis":
+        return "attack" if phase >= 2 and has_target else "differentiate"
+    if directive_type == "echo_break":
+        return "differentiate"
+    if directive_type == "introduce_new_axis":
+        return "differentiate" if phase >= 2 else "define"
+    if directive_type == "use_weapon":
+        if has_target and aggressiveness >= 4 and phase >= 2:
+            return "attack"
+        return "concretize"
+
+    if constraint_kind == "tradeoff":
+        return "concretize"
+    if constraint_kind == "refocus":
+        return "attack" if has_target and phase >= 2 else "differentiate"
+    if not has_target and phase <= 2:
+        return "define"
 
     # Phase weights: [define, differentiate, attack, steelman, concretize, synthesize]
     if phase <= 1:
@@ -608,6 +729,16 @@ def _select_debate_function(speaker_id: str, phase: int, agents_dict: dict[str, 
 
     if preference in _DEBATE_FUNCTIONS:
         weights[_DEBATE_FUNCTIONS.index(preference)] += 3
+
+    if getattr(debate, "get_unresolved_terms", None):
+        unresolved_terms = debate.get_unresolved_terms()
+        if unresolved_terms:
+            weights[0] += 4   # define
+            weights[1] += 4   # differentiate
+            weights[2] = max(0, weights[2] - 2)
+    if getattr(debate, "has_open_attack_against", None) and debate.has_open_attack_against(speaker_id) and has_target:
+        weights[2] += 3
+        weights[3] += 1
 
     # Penalize overused functions
     for i, fn in enumerate(_DEBATE_FUNCTIONS):

@@ -6,13 +6,13 @@ from typing import Any
 
 @dataclass(slots=True)
 class IdeologyVector:
-    state_control: int        # -5=自由市場/無政府 ↔ +5=国家統制
-    tech_optimism: int        # -5=技術悲観 ↔ +5=テクノ楽観
-    rationalism: int          # -5=直感/神秘 ↔ +5=純粋理性/実証
-    power_realism: int        # -5=理想主義/平和主義 ↔ +5=現実政治/武力
-    individualism: int        # -5=急進的集団主義 ↔ +5=急進的個人主義
-    moral_universalism: int   # -5=ニヒリズム/相対主義 ↔ +5=普遍道徳
-    future_orientation: int   # -5=保守/伝統回帰 ↔ +5=急進的進歩主義
+    state_control: int
+    tech_optimism: int
+    rationalism: int
+    power_realism: int
+    individualism: int
+    moral_universalism: int
+    future_orientation: int
 
     def as_list(self) -> list[int]:
         return [
@@ -45,6 +45,7 @@ class Agent:
     ) -> dict[str, Any]:
         from engine.llm import LLMGenerationError, build_prompt, call_llm, validate_reply_length
         from engine.rag import retrieve_chunks
+        from engine.validator import validate_generated_reply
 
         chunks = retrieve_chunks(self.id, context)
         current_retry_hint = retry_hint
@@ -57,30 +58,33 @@ class Agent:
             except LLMGenerationError as exc:
                 last_issue = str(exc)
                 current_retry_hint = (
-                    "前回の出力はJSON要件を満たさなかった。JSONのみを返し、reply_to, stance, "
-                    "main_axis, content を必ず含めよ。"
+                    "前回はJSON形式が崩れた。reply_to, stance, main_axis, content を含むJSONだけを返せ。"
                 )
                 continue
 
             if not validate_reply_length(reply["content"]):
                 last_issue = f"invalid_length:{len(reply['content'])}"
                 current_retry_hint = (
-                    f"前回の本文は{len(reply['content'])}文字だった。本文を80〜180文字に収め、"
-                    "JSONのみ出力し、used_arsenal_idも含めよ。"
+                    f"本文が {len(reply['content'])} 文字や。80〜180文字に収めて、JSONだけを返せ。"
                 )
                 continue
 
-            # Axis novelty gate: reject if same axis used ≥2 times recently
-            main_axis = reply.get("main_axis", "")
-            recent_axes = context.get("agent_recent_axes", [])
+            main_axis = str(reply.get("main_axis", ""))
+            recent_axes = [str(axis) for axis in context.get("agent_recent_axes", [])]
             if main_axis and recent_axes.count(main_axis) >= 2 and attempt < max_attempts:
                 last_issue = f"axis_repeat:{main_axis}"
-                current_retry_hint = (
-                    f"「{main_axis}」の評価軸は直近{recent_axes.count(main_axis)}回使用済み。"
-                    "全く別の評価軸・視点で切り直せ。same axis repeating is a disqualification."
-                )
+                current_retry_hint = f"{main_axis} は直近で使いすぎや。別の軸で言い直せ。"
                 continue
 
+            validation = validate_generated_reply(reply, context)
+            if not validation.ok:
+                last_issue = validation.retry_hint or "semantic_validation_failed"
+                current_retry_hint = validation.retry_hint
+                if attempt < max_attempts:
+                    continue
+                break
+
+            reply["_semantic_analysis"] = validation.analysis.as_dict()
             return reply
 
         raise LLMGenerationError(

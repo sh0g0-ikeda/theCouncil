@@ -3,6 +3,9 @@ from __future__ import annotations
 import random
 from typing import Any
 
+_CLAIM_STALE_AFTER_POSTS = 8
+_DEFINITION_STALE_AFTER_POSTS = 10
+
 
 class DebateState:
     """In-memory debate dynamics: anger/contempt/obsession, retaliation, arsenal cooldowns."""
@@ -44,7 +47,15 @@ class DebateState:
         self.axis_attack_count: dict[str, int] = {}
         # Facilitator active constraint: declared "next N posts must X"
         self.active_constraint: str = ""
+        self.active_constraint_kind: str = ""
         self.constraint_turns: int = 0
+        # Semantic control: open claims / definition requests / novelty memory
+        self.claims: dict[str, dict[str, Any]] = {}
+        self.claim_order: list[str] = []
+        self.definition_requests: dict[str, dict[str, Any]] = {}
+        self.recent_argument_fingerprints: list[str] = []
+        self.recent_example_keys: list[str] = []
+        self.last_seen_post_id: int = 0
 
     def record_post(
         self,
@@ -55,6 +66,9 @@ class DebateState:
         used_arsenal_id: str | None = None,
         arsenal_cooldown: int = 3,
         stance: str = "disagree",
+        post_id: int | None = None,
+        analysis: dict[str, Any] | None = None,
+        content: str = "",
     ) -> None:
         target_agent = target_post.get("agent_id")
         if target_agent and target_agent != speaker_id:
@@ -69,18 +83,6 @@ class DebateState:
         self._update_internal_states(speaker_id, target_agent)
 
         # Track open attacks: attack/steelman directed at another agent → unanswered
-        if debate_function in {"attack", "steelman"} and target_agent and target_agent != speaker_id:
-            snippet = str(target_post.get("content", ""))[:60]
-            self.open_attacks.append((speaker_id, snippet, target_agent))
-            if len(self.open_attacks) > 8:
-                self.open_attacks.pop(0)
-
-        # Resolve open attacks: a disagree/shift response clears attacks against the speaker
-        if stance in {"disagree", "shift"} and target_agent:
-            self.open_attacks = [
-                (a, c, t) for (a, c, t) in self.open_attacks if t != speaker_id
-            ]
-
         # Track agreement streak (for stance drift scoring)
         if stance in {"agree", "supplement"}:
             self.agreement_streak[speaker_id] = self.agreement_streak.get(speaker_id, 0) + 1
@@ -126,6 +128,134 @@ class DebateState:
                 self.arsenal_cooldowns[speaker_id] = {}
             self.arsenal_cooldowns[speaker_id][used_arsenal_id] = arsenal_cooldown
             self.used_arsenal_ids.setdefault(speaker_id, set()).add(used_arsenal_id)
+
+        if post_id is not None:
+            self._register_semantic_state(
+                post_id=post_id,
+                speaker_id=speaker_id,
+                target_post=target_post,
+                debate_function=debate_function,
+                stance=stance,
+                analysis=analysis or {},
+                content=content,
+            )
+
+    def _register_semantic_state(
+        self,
+        *,
+        post_id: int,
+        speaker_id: str,
+        target_post: dict[str, Any],
+        debate_function: str,
+        stance: str,
+        analysis: dict[str, Any],
+        content: str,
+    ) -> None:
+        self.last_seen_post_id = max(self.last_seen_post_id, int(post_id))
+        fingerprint = str(analysis.get("argument_fingerprint", "")).strip()
+        if fingerprint:
+            self.recent_argument_fingerprints.append(fingerprint)
+            if len(self.recent_argument_fingerprints) > 12:
+                self.recent_argument_fingerprints.pop(0)
+
+        for example_key in [str(v).strip() for v in analysis.get("example_keys", [])]:
+            if not example_key:
+                continue
+            self.recent_example_keys.append(example_key)
+            if len(self.recent_example_keys) > 12:
+                self.recent_example_keys.pop(0)
+
+        for term in [str(v).strip() for v in analysis.get("definition_requests", [])]:
+            if not term:
+                continue
+            existing = self.definition_requests.get(term, {})
+            target_agent_id = target_post.get("agent_id") if target_post.get("agent_id") != speaker_id else existing.get("target_agent_id")
+            self.definition_requests[term] = {
+                "status": "open",
+                "requested_post_id": post_id,
+                "requested_by": speaker_id,
+                "target_agent_id": target_agent_id,
+                "created_post_id": post_id,
+                "answered_post_id": existing.get("answered_post_id"),
+                "answered_by": existing.get("answered_by"),
+            }
+
+        for term in [str(v).strip() for v in analysis.get("definition_terms", [])]:
+            if not term:
+                continue
+            existing = self.definition_requests.get(term, {})
+            self.definition_requests[term] = {
+                "status": "answered",
+                "requested_post_id": existing.get("requested_post_id"),
+                "requested_by": existing.get("requested_by"),
+                "target_agent_id": existing.get("target_agent_id"),
+                "created_post_id": existing.get("created_post_id"),
+                "answered_post_id": post_id,
+                "answered_by": speaker_id,
+            }
+
+        for answered_claim_id in [str(v).strip() for v in analysis.get("answered_claim_ids", [])]:
+            self._mark_claim_answered(answered_claim_id, post_id)
+        for answered_post_id in [int(v) for v in analysis.get("answered_post_ids", [])]:
+            for claim_id, claim in self.claims.items():
+                if int(claim.get("parent_post_id") or claim.get("post_id") or -1) == answered_post_id:
+                    self._mark_claim_answered(claim_id, post_id)
+
+        target_agent = target_post.get("agent_id")
+        if target_agent and target_agent != speaker_id and debate_function in {"attack", "steelman"}:
+            claim_units = [
+                dict(unit) for unit in analysis.get("claim_units", [])
+                if isinstance(unit, dict)
+            ]
+            if not claim_units:
+                claim_units = [{
+                    "claim_key": str(analysis.get("argument_fingerprint", "")) or f"claim:{post_id}:0",
+                    "text": str(content).strip()[:120],
+                    "terms": [],
+                }]
+            for idx, unit in enumerate(claim_units):
+                claim_id = f"claim:{post_id}:{idx}"
+                self.claims[claim_id] = {
+                    "claim_id": claim_id,
+                    "claim_key": str(unit.get("claim_key", "")) or f"claim:{post_id}:{idx}",
+                    "claim_text": str(unit.get("text", ""))[:120],
+                    "terms": [str(term) for term in unit.get("terms", [])][:5],
+                    "post_id": post_id,
+                    "parent_post_id": post_id,
+                    "speaker_id": speaker_id,
+                    "target_agent_id": target_agent,
+                    "status": "open",
+                    "focus_axis": analysis.get("effective_axis", ""),
+                    "stance": stance,
+                    "snippet": str(content).strip()[:60],
+                    "created_post_id": post_id,
+                }
+                self.claim_order.append(claim_id)
+                if len(self.claim_order) > 40:
+                    old_claim_id = self.claim_order.pop(0)
+                    self.claims.pop(old_claim_id, None)
+
+        self._sync_open_attacks_from_claims()
+
+    def _mark_claim_answered(self, claim_id: str, answered_by_post_id: int) -> None:
+        claim = self.claims.get(claim_id)
+        if not claim:
+            return
+        claim["status"] = "answered"
+        claim["answered_by_post_id"] = answered_by_post_id
+
+    def _sync_open_attacks_from_claims(self) -> None:
+        mirrored: list[tuple[str, str, str]] = []
+        for claim_id in self.claim_order:
+            claim = self.claims.get(claim_id)
+            if not claim or claim.get("status") != "open":
+                continue
+            attacker_id = str(claim.get("speaker_id", "")).strip()
+            target_agent_id = str(claim.get("target_agent_id", "")).strip()
+            if not attacker_id or not target_agent_id:
+                continue
+            mirrored.append((attacker_id, str(claim.get("snippet", ""))[:60], target_agent_id))
+        self.open_attacks = mirrored[-8:]
 
     def _update_internal_states(self, speaker_id: str, target_id: str | None) -> None:
         if not target_id:
@@ -257,6 +387,12 @@ class DebateState:
                 return axis
         return None
 
+    def peek_forced_axis(self, agent_id: str) -> str | None:
+        for aid, axis in self.forced_axis_queue:
+            if aid == agent_id:
+                return axis
+        return None
+
     # ── Hidden director directives ───────────────────────────────────────────
 
     def push_directive(self, agent_id: str, directive: str) -> None:
@@ -273,10 +409,17 @@ class DebateState:
     def has_directive(self, agent_id: str) -> bool:
         return bool(self.agent_directives.get(agent_id))
 
+    def peek_directive(self, agent_id: str) -> str | None:
+        queue = self.agent_directives.get(agent_id)
+        return queue[0] if queue else None
+
     # ── Open attacks (unanswered) ─────────────────────────────────────────────
 
     def has_open_attack_against(self, agent_id: str) -> bool:
         return any(t == agent_id for (_, _, t) in self.open_attacks)
+
+    def has_any_open_attacks(self) -> bool:
+        return bool(self.open_attacks)
 
     def get_strongest_open_attack(self, agent_id: str) -> tuple[str, str] | None:
         """Return (attacker_id, content_snippet) of the most recent unanswered attack against agent_id."""
@@ -284,6 +427,77 @@ class DebateState:
             if target == agent_id:
                 return (attacker_id, snippet)
         return None
+
+    def count_open_claims(self) -> int:
+        return sum(1 for claim in self.claims.values() if claim.get("status") == "open")
+
+    def get_definition_priority_post_id_for(self, agent_id: str) -> int | None:
+        open_requests = [
+            request for request in self.definition_requests.values()
+            if request.get("status") == "open"
+            and request.get("requested_by") != agent_id
+            and request.get("target_agent_id") in {None, "", agent_id}
+        ]
+        if not open_requests:
+            return None
+        latest = max(open_requests, key=lambda item: int(item.get("requested_post_id") or 0))
+        requested_post_id = latest.get("requested_post_id")
+        return int(requested_post_id) if requested_post_id is not None else None
+
+    def has_pending_definition_response(self, agent_id: str) -> bool:
+        return self.get_definition_priority_post_id_for(agent_id) is not None
+
+    def get_priority_post_id_for(self, agent_id: str) -> int | None:
+        for claim_id in reversed(self.claim_order):
+            claim = self.claims.get(claim_id)
+            if not claim:
+                continue
+            if claim.get("status") == "open" and claim.get("target_agent_id") == agent_id:
+                return int(claim["post_id"])
+        return self.get_definition_priority_post_id_for(agent_id)
+
+    def get_claim_units_for_post(self, post_id: int | None) -> list[dict[str, Any]]:
+        if post_id is None:
+            return []
+        units: list[dict[str, Any]] = []
+        for claim_id in self.claim_order:
+            claim = self.claims.get(claim_id)
+            if not claim or int(claim.get("parent_post_id") or -1) != int(post_id):
+                continue
+            units.append(
+                {
+                    "claim_id": claim_id,
+                    "claim_key": str(claim.get("claim_key", "")),
+                    "text": str(claim.get("claim_text", "") or claim.get("snippet", "")),
+                    "terms": [str(term) for term in claim.get("terms", [])],
+                }
+            )
+        return units
+
+    def get_unresolved_terms(self) -> list[str]:
+        open_terms = [
+            term for term, payload in self.definition_requests.items()
+            if payload.get("status") == "open"
+        ]
+        return sorted(open_terms)
+
+    def age_obligations(self, current_post_id: int) -> None:
+        if current_post_id <= 0:
+            return
+        self.last_seen_post_id = max(self.last_seen_post_id, int(current_post_id))
+        for claim in self.claims.values():
+            if claim.get("status") != "open":
+                continue
+            created = int(claim.get("created_post_id") or claim.get("post_id") or current_post_id)
+            if current_post_id - created > _CLAIM_STALE_AFTER_POSTS:
+                claim["status"] = "stale"
+        for payload in self.definition_requests.values():
+            if payload.get("status") != "open":
+                continue
+            created = int(payload.get("created_post_id") or payload.get("requested_post_id") or current_post_id)
+            if current_post_id - created > _DEFINITION_STALE_AFTER_POSTS:
+                payload["status"] = "stale"
+        self._sync_open_attacks_from_claims()
 
     # ── Axis depth (introduced → contested → rebutted → synthesized) ─────────
 
@@ -317,20 +531,30 @@ class DebateState:
 
     # ── Facilitator active constraint ─────────────────────────────────────────
 
-    def set_facilitator_constraint(self, constraint: str, turns: int = 2) -> None:
+    def set_facilitator_constraint(self, constraint: str, turns: int = 2, kind: str = "") -> None:
         self.active_constraint = constraint
+        self.active_constraint_kind = kind
         self.constraint_turns = turns
 
-    def consume_constraint(self) -> str:
-        """Return active constraint text and decrement counter. Returns '' if none."""
+    def peek_constraint_kind(self) -> str:
+        return self.active_constraint_kind if self.constraint_turns > 0 else ""
+
+    def peek_constraint(self) -> tuple[str, str]:
         if not self.active_constraint or self.constraint_turns <= 0:
-            return ""
-        result = self.active_constraint
+            return ("", "")
+        return (self.active_constraint, self.active_constraint_kind)
+
+    def consume_constraint(self) -> tuple[str, str]:
+        """Return active constraint text/kind and decrement counter. Returns ('','') if none."""
+        result, kind = self.peek_constraint()
+        if not result:
+            return ("", "")
         self.constraint_turns -= 1
         if self.constraint_turns <= 0:
             self.active_constraint = ""
+            self.active_constraint_kind = ""
             self.constraint_turns = 0
-        return result
+        return (result, kind)
 
     def to_dict(self) -> dict:
         return {
@@ -352,7 +576,14 @@ class DebateState:
             "axis_depth": self.axis_depth,
             "axis_attack_count": self.axis_attack_count,
             "active_constraint": self.active_constraint,
+            "active_constraint_kind": self.active_constraint_kind,
             "constraint_turns": self.constraint_turns,
+            "claims": self.claims,
+            "claim_order": self.claim_order,
+            "definition_requests": self.definition_requests,
+            "recent_argument_fingerprints": self.recent_argument_fingerprints,
+            "recent_example_keys": self.recent_example_keys,
+            "last_seen_post_id": self.last_seen_post_id,
         }
 
     @classmethod
@@ -401,5 +632,24 @@ class DebateState:
         instance.axis_depth = {str(k): str(v) for k, v in data.get("axis_depth", {}).items()}
         instance.axis_attack_count = {str(k): int(v) for k, v in data.get("axis_attack_count", {}).items()}
         instance.active_constraint = str(data.get("active_constraint", ""))
+        instance.active_constraint_kind = str(data.get("active_constraint_kind", ""))
         instance.constraint_turns = int(data.get("constraint_turns", 0))
+        instance.claims = {
+            str(k): dict(v) for k, v in data.get("claims", {}).items()
+            if isinstance(v, dict)
+        }
+        instance.claim_order = [str(v) for v in data.get("claim_order", [])]
+        instance.definition_requests = {
+            str(k): dict(v) for k, v in data.get("definition_requests", {}).items()
+            if isinstance(v, dict)
+        }
+        instance.recent_argument_fingerprints = [
+            str(v) for v in data.get("recent_argument_fingerprints", [])
+        ]
+        instance.recent_example_keys = [
+            str(v) for v in data.get("recent_example_keys", [])
+        ]
+        instance.last_seen_post_id = int(data.get("last_seen_post_id", 0))
+        if instance.claims:
+            instance._sync_open_attacks_from_claims()
         return instance

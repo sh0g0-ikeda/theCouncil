@@ -230,6 +230,21 @@ def build_prompt(
     private_directive = context.get("private_directive", "")
     if private_directive:
         context_text += f"\n🎬 【内部指令・非公開】{private_directive}"
+    target_claim_summary = context.get("target_claim_summary", "")
+    if target_claim_summary:
+        context_text += f"\n🧭 中心命題: {target_claim_summary}"
+    pending_definition_terms = context.get("pending_definition_terms", [])[:3]
+    if pending_definition_terms:
+        context_text += f"\n📚 未解決の定義語: {' / '.join(pending_definition_terms)}"
+    recent_argument_fingerprints = context.get("recent_argument_fingerprints", [])[:4]
+    if recent_argument_fingerprints:
+        context_text += f"\n♻️ 直近で使われた主張骨格: {' / '.join(recent_argument_fingerprints)}"
+    forbidden_example_keys = context.get("forbidden_example_keys", [])[:4]
+    if forbidden_example_keys:
+        context_text += f"\n🚫 直近で使われた実例: {' / '.join(forbidden_example_keys)}"
+    required_response_kind = context.get("required_response_kind", "")
+    if required_response_kind:
+        context_text += f"\n📌 今回の必須応答種別: {required_response_kind}"
     if retry_hint:
         context_text += f"\n修正: {retry_hint}"
 
