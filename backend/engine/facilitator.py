@@ -57,6 +57,11 @@ _FACILITATOR_FUNCTIONS = {
     ),
 }
 
+_FACILITATOR_FUNCTIONS["camp_reassert"] = (
+    "Re-state the proposition, the camps, and the unanswered subquestions in one short intervention. "
+    "Provide followup_assignments with agent_id, subquestion_id, text, and camp_function so the next turns are constrained."
+)
+
 FACILITATOR_SYSTEM_PROMPT = """あなたは議論掲示板に割り込む「構造修正装置」だ。
 与えられた【機能】を正確に実行し、議論の構造的問題を一刺しする。
 
@@ -92,6 +97,24 @@ async def make_facilitate(
     fn_instruction = _FACILITATOR_FUNCTIONS[fn_key]
     unresolved_terms = debate.get_unresolved_terms() if debate and hasattr(debate, "get_unresolved_terms") else []
     open_claim_count = int(debate.count_open_claims()) if debate and hasattr(debate, "count_open_claims") else 0
+    followup_assignments: list[dict[str, Any]] = []
+    if fn_key == "camp_reassert" and debate is not None and agent_display_names:
+        for agent_id in agent_display_names:
+            if not hasattr(debate, "get_priority_subquestion_for"):
+                break
+            subquestion = debate.get_priority_subquestion_for(agent_id)
+            if not subquestion:
+                continue
+            followup_assignments.append(
+                {
+                    "agent_id": agent_id,
+                    "subquestion_id": str(subquestion.get("subquestion_id", "")),
+                    "text": str(subquestion.get("text", ""))[:120],
+                    "camp_function": str(subquestion.get("camp_function", "") or getattr(debate, "get_camp_function", lambda _aid: "")(agent_id)),
+                }
+            )
+            if len(followup_assignments) >= 3:
+                break
 
     if not os.getenv("OPENAI_API_KEY"):
         fallbacks = {
@@ -103,11 +126,13 @@ async def make_facilitate(
             "force_tradeoff": f"{fallback_axis}を通すなら何を捨てるか言えや。次の2レスはそのコストだけ答えろ",
             "refocus": f"話散りすぎや。次の2レスは{fallback_axis}だけに絞って答えろ",
         }
+        fallbacks["camp_reassert"] = "Re-state the camps and force the next replies to answer their assigned subquestions."
         return {
             "content": fallbacks[fn_key],
             "stance": "facilitate",
             "main_axis": fallback_axis,
             "axis_assignments": [],
+            "followup_assignments": followup_assignments,
             "constraint": fallbacks[fn_key] if fn_key in {"force_tradeoff", "refocus"} else "",
             "constraint_turns": 2 if fn_key in {"force_tradeoff", "refocus"} else 0,
             "constraint_kind": fn_key if fn_key in {"force_tradeoff", "refocus"} else "",
@@ -162,6 +187,26 @@ async def make_facilitate(
             for item in raw
             if isinstance(item, dict) and "agent_id" in item and "axis" in item
         ]
+    if fn_key == "camp_reassert":
+        raw_followups = payload.get("followup_assignments", [])
+        parsed: list[dict[str, Any]] = []
+        for item in raw_followups:
+            if not isinstance(item, dict):
+                continue
+            agent_id = str(item.get("agent_id", "")).strip()
+            subquestion_id = str(item.get("subquestion_id", "")).strip()
+            if not agent_id or not subquestion_id:
+                continue
+            parsed.append(
+                {
+                    "agent_id": agent_id,
+                    "subquestion_id": subquestion_id,
+                    "text": str(item.get("text", "")).strip(),
+                    "camp_function": str(item.get("camp_function", "")).strip(),
+                }
+            )
+        if parsed:
+            followup_assignments = parsed
     constraint = ""
     constraint_turns = 2
     constraint_kind = ""
@@ -179,6 +224,7 @@ async def make_facilitate(
         "stance": "facilitate",
         "main_axis": str(payload.get("main_axis", fallback_axis)),
         "axis_assignments": axis_assignments,
+        "followup_assignments": followup_assignments,
         "constraint": constraint,
         "constraint_turns": constraint_turns,
         "constraint_kind": constraint_kind,
@@ -192,6 +238,9 @@ def _select_facilitator_function(posts: list[dict[str, Any]], debate: Any = None
     ai_posts = [p for p in posts if p.get("agent_id")]
     unresolved_terms = debate.get_unresolved_terms() if debate and hasattr(debate, "get_unresolved_terms") else []
     open_claim_count = int(debate.count_open_claims()) if debate and hasattr(debate, "count_open_claims") else 0
+    has_followup_pressure = False
+    if debate and hasattr(debate, "followup_assignments"):
+        has_followup_pressure = any(item.get("status") == "open" for item in getattr(debate, "followup_assignments", []))
 
     # Whether any axis has been genuinely contested (guards force_tradeoff)
     has_contested = (
@@ -205,6 +254,14 @@ def _select_facilitator_function(posts: list[dict[str, Any]], debate: Any = None
 
     if unresolved_terms:
         return "define" if len(unresolved_terms) == 1 else "differentiate"
+
+    if has_followup_pressure:
+        return "camp_reassert"
+
+    if open_claim_count >= 3 and debate and hasattr(debate, "agent_sides"):
+        distinct_sides = {side for side in getattr(debate, "agent_sides", {}).values() if side in {"support", "oppose"}}
+        if len(distinct_sides) >= 2:
+            return "camp_reassert"
 
     if open_claim_count >= 4:
         return "refocus"

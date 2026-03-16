@@ -109,6 +109,125 @@ def test_validate_generated_reply_rejects_alignment_with_opposite_role() -> None
     assert result.ok is False
 
 
+def test_validate_generated_reply_rejects_opening_post_that_breaks_assigned_side() -> None:
+    result = validate_generated_reply(
+        {
+            "main_axis": "capitalism",
+            "content": "Capitalism survives because every crisis only makes it more adaptive and resilient.",
+            "stance": "disagree",
+            "proposition_stance": "oppose",
+        },
+        {
+            "target_post": {},
+            "conflict_axis": "capitalism",
+            "is_first_post": True,
+            "assigned_side": "support",
+            "assigned_side_label": "capitalism will end",
+            "frame_proposition": "Capitalism will eventually end.",
+            "support_label": "end",
+            "oppose_label": "survive",
+            "support_thesis": "Capitalism will end because contradiction and breakdown accumulate.",
+            "oppose_thesis": "Capitalism survives by adaptation and recomposition.",
+            "position_anchor_terms": ["capitalism", "end", "contradiction", "breakdown"],
+        },
+    )
+
+    assert result.ok is False
+
+
+def test_validate_generated_reply_allows_explicit_shift_to_opposite_side() -> None:
+    result = validate_generated_reply(
+        {
+            "main_axis": "capitalism",
+            "content": "I shift here: capitalism may survive longer than I said because adaptation can absorb some crises.",
+            "stance": "shift",
+            "proposition_stance": "shift",
+            "shift_reason": "I concede that adaptive recomposition can delay collapse.",
+        },
+        {
+            "target_post": {},
+            "conflict_axis": "capitalism",
+            "assigned_side": "support",
+            "assigned_side_label": "capitalism will end",
+            "frame_proposition": "Capitalism will eventually end.",
+            "support_label": "end",
+            "oppose_label": "survive",
+            "support_thesis": "Capitalism will end because contradiction and breakdown accumulate.",
+            "oppose_thesis": "Capitalism survives by adaptation and recomposition.",
+            "position_anchor_terms": ["capitalism", "end", "contradiction", "breakdown"],
+        },
+    )
+
+    assert result.ok is True
+
+
+def test_validate_generated_reply_requires_explicit_proposition_stance() -> None:
+    result = validate_generated_reply(
+        {
+            "main_axis": "ai monopoly",
+            "content": "Concentrated capital is dangerous because one actor can set the boundary of frontier research and the whole field.",
+            "stance": "disagree",
+        },
+        {
+            "target_post": {"id": 3, "content": "Concentrated capital can accelerate frontier research."},
+            "conflict_axis": "ai monopoly",
+            "assigned_side": "support",
+            "assigned_side_label": "monopoly is bad",
+            "assigned_camp_function": "power_concentration",
+        },
+    )
+
+    assert result.ok is False
+    assert "proposition_stance" in result.retry_hint
+
+
+def test_validate_generated_reply_rejects_wrong_camp_function() -> None:
+    result = validate_generated_reply(
+        {
+            "main_axis": "ai monopoly",
+            "content": "Monopoly hurts consumer welfare because the same central platforms foreclose alternatives and reduce choice.",
+            "stance": "disagree",
+            "local_stance_to_target": "disagree",
+            "proposition_stance": "support",
+            "camp_function": "innovation",
+        },
+        {
+            "target_post": {"id": 3, "content": "Monopoly lets labs invest at frontier scale."},
+            "conflict_axis": "ai monopoly",
+            "assigned_side": "support",
+            "assigned_side_label": "monopoly is bad",
+            "assigned_camp_function": "consumer_welfare",
+        },
+    )
+
+    assert result.ok is False
+    assert "camp_function" in result.retry_hint
+
+
+def test_validate_generated_reply_requires_subquestion_when_assigned() -> None:
+    result = validate_generated_reply(
+        {
+            "main_axis": "ai monopoly",
+            "content": "Scale can accelerate safety research, but concentrated compute narrows who gets to shape the stack.",
+            "stance": "disagree",
+            "local_stance_to_target": "disagree",
+            "proposition_stance": "support",
+            "camp_function": "power_concentration",
+            "subquestion_id": "sq:other",
+        },
+        {
+            "target_post": {"id": 3, "content": "Scale can accelerate safety research."},
+            "conflict_axis": "ai monopoly",
+            "assigned_side": "support",
+            "assigned_camp_function": "power_concentration",
+            "required_subquestion_id": "sq:1:0",
+        },
+    )
+
+    assert result.ok is False
+    assert "subquestion" in result.retry_hint.lower()
+
+
 def test_validate_generated_reply_enforces_rebut_directive_stance() -> None:
     result = validate_generated_reply(
         {
@@ -243,6 +362,56 @@ def test_debate_state_tracks_open_claims_and_definition_requests() -> None:
     assert debate.get_unresolved_terms() == ["民主主義"]
     assert "rationalism:democracy|law" in debate.recent_argument_fingerprints
     assert debate.get_claim_units_for_post(11)
+
+
+def test_debate_state_registers_binary_frame_and_shift() -> None:
+    debate = DebateState()
+    debate.set_debate_frame(
+        {
+            "proposition": "Capitalism will eventually end.",
+            "support_label": "end",
+            "oppose_label": "survive",
+            "conditional_label": "depends",
+            "support_thesis": "Capitalism ends through contradiction.",
+            "oppose_thesis": "Capitalism survives through adaptation.",
+        },
+        {
+            "elon": {
+                "side": "oppose",
+                "role": "con",
+                "thesis": "Capitalism survives through adaptation.",
+                "keywords": ["capitalism", "survives", "adaptation"],
+                "camp_function": "innovation",
+            }
+        },
+    )
+
+    debate.record_post(
+        "elon",
+        {"id": 2, "agent_id": "marx", "content": "Capitalism ends."},
+        "capitalism",
+        debate_function="attack",
+        stance="shift",
+        post_id=12,
+        analysis={
+            "effective_axis": "capitalism",
+            "effective_function": "attack",
+            "aligned_side": "support",
+            "argument_fingerprint": "capitalism:end|contradiction",
+            "definition_requests": [],
+            "definition_terms": [],
+            "answered_post_ids": [],
+            "answered_claim_ids": [],
+            "example_keys": [],
+            "referenced_terms": ["capitalism", "end", "contradiction"],
+            "claim_units": [{"claim_key": "capitalism:end", "text": "capitalism ends", "terms": ["capitalism", "end"]}],
+        },
+        content="I shift: capitalism may actually end through contradiction.",
+    )
+
+    assert debate.get_agent_side("elon") == "support"
+    assert debate.shift_history["elon"][-1]["to"] == "support"
+    assert debate.get_camp_function("elon") == "innovation"
 
 
 def test_debate_state_keeps_open_attack_until_answered_claim_is_marked() -> None:

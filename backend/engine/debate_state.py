@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import random
+import re
 from typing import Any
 
 _CLAIM_STALE_AFTER_POSTS = 8
 _DEFINITION_STALE_AFTER_POSTS = 10
+_CONTRACT_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9\u3040-\u30ff\u3400-\u9fff]{2,24}", re.UNICODE)
 
 
 class DebateState:
@@ -29,6 +31,12 @@ class DebateState:
         self.used_arsenal_ids: dict[str, set[str]] = {}
         # Debate role assignment: agent_id -> "pro" | "con" | "neutral"
         self.debate_roles: dict[str, str] = {}
+        # Binary frame for the thread and per-agent side assignment
+        self.debate_frame: dict[str, Any] = {}
+        self.agent_sides: dict[str, str] = {}
+        self.camp_functions: dict[str, str] = {}
+        self.side_contracts: dict[str, dict[str, Any]] = {}
+        self.shift_history: dict[str, list[dict[str, Any]]] = {}
         # Facilitator-assigned forced axis queue: [(agent_id, axis), ...]
         self.forced_axis_queue: list[tuple[str, str]] = []
         # Evaluation axes decomposed from thread topic (set once at start)
@@ -54,6 +62,9 @@ class DebateState:
         self.claims: dict[str, dict[str, Any]] = {}
         self.claim_order: list[str] = []
         self.definition_requests: dict[str, dict[str, Any]] = {}
+        self.subquestions: dict[str, dict[str, Any]] = {}
+        self.subquestion_order: list[str] = []
+        self.followup_assignments: list[dict[str, Any]] = []
         self.recent_argument_fingerprints: list[str] = []
         self.recent_example_keys: list[str] = []
         # Per-agent first committed line in this thread, used to resist silent stance inversion
@@ -204,6 +215,17 @@ class DebateState:
                 if int(claim.get("parent_post_id") or claim.get("post_id") or -1) == answered_post_id:
                     self._mark_claim_answered(claim_id, post_id)
 
+        subquestion_id = str(analysis.get("subquestion_id", "")).strip()
+        if subquestion_id:
+            subquestion = self.subquestions.get(subquestion_id, {})
+            if subquestion and subquestion.get("target_agent_id") == speaker_id:
+                subquestion["status"] = "answered"
+                subquestion["answered_post_id"] = post_id
+                subquestion["answered_by"] = speaker_id
+                for item in self.followup_assignments:
+                    if item.get("status") == "open" and item.get("subquestion_id") == subquestion_id and item.get("agent_id") == speaker_id:
+                        item["status"] = "resolved"
+
         target_agent = target_post.get("agent_id")
         if target_agent and target_agent != speaker_id and debate_function in {"attack", "steelman"}:
             claim_units = [
@@ -237,8 +259,36 @@ class DebateState:
                 if len(self.claim_order) > 40:
                     old_claim_id = self.claim_order.pop(0)
                     self.claims.pop(old_claim_id, None)
+        if target_agent and target_agent != speaker_id and debate_function in {"attack", "steelman", "differentiate", "concretize"}:
+            claim_units = [
+                dict(unit) for unit in analysis.get("claim_units", [])
+                if isinstance(unit, dict)
+            ]
+            camp_function = str(analysis.get("camp_function", "")).strip() or self.get_camp_function(speaker_id)
+            side = str(analysis.get("proposition_stance", "")).strip() or self.get_agent_side(speaker_id)
+            for idx, unit in enumerate(claim_units[:2]):
+                subquestion_id = f"sq:{post_id}:{idx}"
+                self.subquestions[subquestion_id] = {
+                    "subquestion_id": subquestion_id,
+                    "text": str(unit.get("text", ""))[:120] or str(content).strip()[:120],
+                    "terms": [str(term) for term in unit.get("terms", [])][:5],
+                    "post_id": post_id,
+                    "target_agent_id": target_agent,
+                    "speaker_id": speaker_id,
+                    "camp_function": camp_function,
+                    "side": side,
+                    "status": "open",
+                    "created_post_id": post_id,
+                }
+                self.subquestion_order.append(subquestion_id)
+                if len(self.subquestion_order) > 40:
+                    stale_id = self.subquestion_order.pop(0)
+                    self.subquestions.pop(stale_id, None)
 
-        if speaker_id and speaker_id not in self.position_anchors:
+        if speaker_id and (
+            speaker_id not in self.position_anchors
+            or int(self.position_anchors.get(speaker_id, {}).get("post_id") or 0) <= 0
+        ):
             referenced_terms = [
                 str(term) for term in analysis.get("referenced_terms", [])
                 if str(term).strip()
@@ -250,7 +300,18 @@ class DebateState:
                 "terms": referenced_terms[:6],
                 "axis": str(analysis.get("effective_axis", "")),
                 "role": self.debate_roles.get(speaker_id, ""),
+                "side": self.agent_sides.get(speaker_id, ""),
+                "source": "post",
             }
+
+        aligned_side = str(analysis.get("aligned_side", "")).strip()
+        if stance == "shift" and aligned_side and aligned_side != self.agent_sides.get(speaker_id, ""):
+            self.register_shift(
+                speaker_id,
+                aligned_side,
+                post_id=post_id,
+                summary=str(content).strip(),
+            )
 
         self._sync_open_attacks_from_claims()
 
@@ -388,6 +449,94 @@ class DebateState:
     def roles_initialized(self) -> bool:
         return bool(self.debate_roles)
 
+    def set_debate_frame(self, frame: dict[str, Any], assignments: dict[str, dict[str, Any]]) -> None:
+        self.debate_frame = {
+            "proposition": str(frame.get("proposition", "")),
+            "support_label": str(frame.get("support_label", "")),
+            "oppose_label": str(frame.get("oppose_label", "")),
+            "conditional_label": str(frame.get("conditional_label", "")),
+            "support_thesis": str(frame.get("support_thesis", "")),
+            "oppose_thesis": str(frame.get("oppose_thesis", "")),
+        }
+        self.agent_sides = {}
+        self.camp_functions = {}
+        self.side_contracts = {}
+        for agent_id, payload in assignments.items():
+            side = str(payload.get("side", "")).strip()
+            if side not in {"support", "oppose", "conditional"}:
+                continue
+            self.agent_sides[str(agent_id)] = side
+            role = str(payload.get("role") or {"support": "pro", "oppose": "con", "conditional": "neutral"}[side])
+            self.debate_roles[str(agent_id)] = role
+            thesis = str(payload.get("thesis", "")).strip()
+            camp_function = str(payload.get("camp_function", "")).strip()
+            keywords = [
+                str(term).strip()
+                for term in payload.get("keywords", [])
+                if str(term).strip()
+            ]
+            if not keywords:
+                keywords = _CONTRACT_TOKEN_PATTERN.findall(thesis)[:8]
+            self.side_contracts[str(agent_id)] = {
+                "side": side,
+                "role": role,
+                "thesis": thesis,
+                "keywords": keywords[:8],
+                "camp_function": camp_function,
+            }
+            if camp_function:
+                self.camp_functions[str(agent_id)] = camp_function
+            existing_anchor = self.position_anchors.get(str(agent_id), {})
+            if not existing_anchor:
+                self.position_anchors[str(agent_id)] = {
+                    "post_id": 0,
+                    "summary": thesis[:140],
+                    "fingerprint": "",
+                    "terms": keywords[:6],
+                    "axis": "",
+                    "role": role,
+                    "side": side,
+                    "source": "contract",
+                }
+
+    def get_debate_frame(self) -> dict[str, Any]:
+        return dict(self.debate_frame)
+
+    def get_agent_side(self, agent_id: str | None) -> str:
+        if not agent_id:
+            return ""
+        return self.agent_sides.get(agent_id, "")
+
+    def get_side_contract(self, agent_id: str) -> dict[str, Any]:
+        return dict(self.side_contracts.get(agent_id, {}))
+
+    def get_camp_function(self, agent_id: str | None) -> str:
+        if not agent_id:
+            return ""
+        return self.camp_functions.get(agent_id, "")
+
+    def get_opposing_side(self, agent_id: str) -> str:
+        side = self.get_agent_side(agent_id)
+        if side == "support":
+            return "oppose"
+        if side == "oppose":
+            return "support"
+        return ""
+
+    def register_shift(self, agent_id: str, new_side: str, *, post_id: int, summary: str) -> None:
+        if new_side not in {"support", "oppose", "conditional"}:
+            return
+        history = self.shift_history.setdefault(agent_id, [])
+        history.append({"post_id": int(post_id), "from": self.agent_sides.get(agent_id, ""), "to": new_side, "summary": summary[:140]})
+        if len(history) > 5:
+            history.pop(0)
+        self.agent_sides[agent_id] = new_side
+        role = {"support": "pro", "oppose": "con", "conditional": "neutral"}[new_side]
+        self.debate_roles[agent_id] = role
+        contract = self.side_contracts.setdefault(agent_id, {})
+        contract["side"] = new_side
+        contract["role"] = role
+
     # ── Forced axis queue (set by facilitator rerail) ────────────────────────
 
     def push_axis_assignments(self, assignments: list[tuple[str, str]]) -> None:
@@ -465,13 +614,66 @@ class DebateState:
         return self.get_definition_priority_post_id_for(agent_id) is not None
 
     def get_priority_post_id_for(self, agent_id: str) -> int | None:
+        priority_subquestion_post_id = self.get_priority_subquestion_post_id_for(agent_id)
+        if priority_subquestion_post_id is not None:
+            return priority_subquestion_post_id
+        open_claims: list[dict[str, Any]] = []
         for claim_id in reversed(self.claim_order):
             claim = self.claims.get(claim_id)
             if not claim:
                 continue
             if claim.get("status") == "open" and claim.get("target_agent_id") == agent_id:
-                return int(claim["post_id"])
+                open_claims.append(claim)
+        if open_claims:
+            opposing_side = self.get_opposing_side(agent_id)
+            if opposing_side:
+                for claim in open_claims:
+                    if self.get_agent_side(str(claim.get("speaker_id", ""))) == opposing_side:
+                        return int(claim["post_id"])
+            return int(open_claims[0]["post_id"])
         return self.get_definition_priority_post_id_for(agent_id)
+
+    def push_followup_assignments(self, assignments: list[dict[str, Any]]) -> None:
+        for item in assignments:
+            if not isinstance(item, dict):
+                continue
+            agent_id = str(item.get("agent_id", "")).strip()
+            subquestion_id = str(item.get("subquestion_id", "")).strip()
+            if not agent_id or not subquestion_id:
+                continue
+            self.followup_assignments.append(
+                {
+                    "agent_id": agent_id,
+                    "subquestion_id": subquestion_id,
+                    "text": str(item.get("text", "")).strip(),
+                    "camp_function": str(item.get("camp_function", "")).strip(),
+                    "status": "open",
+                }
+            )
+        if len(self.followup_assignments) > 20:
+            self.followup_assignments = self.followup_assignments[-20:]
+
+    def get_priority_subquestion_for(self, agent_id: str) -> dict[str, Any] | None:
+        for item in reversed(self.followup_assignments):
+            if item.get("status") != "open" or item.get("agent_id") != agent_id:
+                continue
+            subquestion = self.subquestions.get(str(item.get("subquestion_id", "")))
+            if subquestion and subquestion.get("status") == "open":
+                return dict(subquestion)
+        for subquestion_id in reversed(self.subquestion_order):
+            subquestion = self.subquestions.get(subquestion_id)
+            if not subquestion or subquestion.get("status") != "open":
+                continue
+            if subquestion.get("target_agent_id") == agent_id:
+                return dict(subquestion)
+        return None
+
+    def get_priority_subquestion_post_id_for(self, agent_id: str) -> int | None:
+        subquestion = self.get_priority_subquestion_for(agent_id)
+        if not subquestion:
+            return None
+        post_id = subquestion.get("post_id")
+        return int(post_id) if post_id is not None else None
 
     def get_claim_units_for_post(self, post_id: int | None) -> list[dict[str, Any]]:
         if post_id is None:
@@ -490,6 +692,17 @@ class DebateState:
                 }
             )
         return units
+
+    def get_subquestion_for_post(self, post_id: int | None) -> dict[str, Any]:
+        if post_id is None:
+            return {}
+        for subquestion_id in reversed(self.subquestion_order):
+            subquestion = self.subquestions.get(subquestion_id)
+            if not subquestion:
+                continue
+            if int(subquestion.get("post_id") or -1) == int(post_id):
+                return dict(subquestion)
+        return {}
 
     def get_unresolved_terms(self) -> list[str]:
         open_terms = [
@@ -514,6 +727,18 @@ class DebateState:
             created = int(payload.get("created_post_id") or payload.get("requested_post_id") or current_post_id)
             if current_post_id - created > _DEFINITION_STALE_AFTER_POSTS:
                 payload["status"] = "stale"
+        for subquestion in self.subquestions.values():
+            if subquestion.get("status") != "open":
+                continue
+            created = int(subquestion.get("created_post_id") or subquestion.get("post_id") or current_post_id)
+            if current_post_id - created > _CLAIM_STALE_AFTER_POSTS:
+                subquestion["status"] = "stale"
+        for item in self.followup_assignments:
+            subquestion = self.subquestions.get(str(item.get("subquestion_id", "")))
+            if item.get("status") != "open":
+                continue
+            if not subquestion or subquestion.get("status") != "open":
+                item["status"] = "resolved"
         self._sync_open_attacks_from_claims()
 
     # ── Axis depth (introduced → contested → rebutted → synthesized) ─────────
@@ -600,6 +825,11 @@ class DebateState:
             "stance_history": self.stance_history,
             "used_arsenal_ids": {k: list(v) for k, v in self.used_arsenal_ids.items()},
             "debate_roles": self.debate_roles,
+            "debate_frame": self.debate_frame,
+            "agent_sides": self.agent_sides,
+            "camp_functions": self.camp_functions,
+            "side_contracts": self.side_contracts,
+            "shift_history": self.shift_history,
             "forced_axis_queue": self.forced_axis_queue,
             "topic_axes": self.topic_axes,
             "agent_axis_usage": self.agent_axis_usage,
@@ -615,6 +845,9 @@ class DebateState:
             "claims": self.claims,
             "claim_order": self.claim_order,
             "definition_requests": self.definition_requests,
+            "subquestions": self.subquestions,
+            "subquestion_order": self.subquestion_order,
+            "followup_assignments": self.followup_assignments,
             "recent_argument_fingerprints": self.recent_argument_fingerprints,
             "recent_example_keys": self.recent_example_keys,
             "position_anchors": self.position_anchors,
@@ -649,6 +882,24 @@ class DebateState:
             k: set(v) for k, v in data.get("used_arsenal_ids", {}).items()
         }
         instance.debate_roles = data.get("debate_roles", {})
+        instance.debate_frame = {
+            str(k): str(v) for k, v in data.get("debate_frame", {}).items()
+        }
+        instance.agent_sides = {
+            str(k): str(v) for k, v in data.get("agent_sides", {}).items()
+        }
+        instance.camp_functions = {
+            str(k): str(v) for k, v in data.get("camp_functions", {}).items()
+        }
+        instance.side_contracts = {
+            str(k): dict(v) for k, v in data.get("side_contracts", {}).items()
+            if isinstance(v, dict)
+        }
+        instance.shift_history = {
+            str(k): [dict(item) for item in v if isinstance(item, dict)]
+            for k, v in data.get("shift_history", {}).items()
+            if isinstance(v, list)
+        }
         instance.topic_axes = data.get("topic_axes", [])
         instance.agent_axis_usage = {k: list(v) for k, v in data.get("agent_axis_usage", {}).items()}
         instance.forced_axis_queue = [
@@ -681,6 +932,14 @@ class DebateState:
             str(k): dict(v) for k, v in data.get("definition_requests", {}).items()
             if isinstance(v, dict)
         }
+        instance.subquestions = {
+            str(k): dict(v) for k, v in data.get("subquestions", {}).items()
+            if isinstance(v, dict)
+        }
+        instance.subquestion_order = [str(v) for v in data.get("subquestion_order", [])]
+        instance.followup_assignments = [
+            dict(v) for v in data.get("followup_assignments", []) if isinstance(v, dict)
+        ]
         instance.recent_argument_fingerprints = [
             str(v) for v in data.get("recent_argument_fingerprints", [])
         ]

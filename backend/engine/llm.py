@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 
 try:
@@ -66,6 +67,52 @@ _PHASE_DIRECTIVES: dict[int, str] = {
 _client: Any | None = None
 
 
+def _frame_terms(text: str) -> list[str]:
+    return re.findall(r"[A-Za-z0-9\u3040-\u30ff\u3400-\u9fff]{2,24}", text or "")
+
+
+def _fallback_debate_frame(topic: str, agent_list: list[dict[str, Any]]) -> dict[str, Any]:
+    proposition = (topic or "").strip() or "the proposition"
+    frame = {
+        "proposition": proposition,
+        "support_label": "yes",
+        "oppose_label": "no",
+        "conditional_label": "depends",
+        "support_thesis": f"Argue that the proposition is true: {proposition}",
+        "oppose_thesis": f"Argue that the proposition is false, overstated, or survives through adaptation: {proposition}",
+    }
+    assignments: dict[str, dict[str, Any]] = {}
+    role_map = {"support": "pro", "oppose": "con", "conditional": "neutral"}
+    rotation = ("support", "oppose", "conditional")
+    camp_rotation = (
+        "innovation",
+        "competition",
+        "consumer_welfare",
+        "safety",
+        "power_concentration",
+    )
+    for index, agent in enumerate(agent_list):
+        side = rotation[index % len(rotation)]
+        camp_function = camp_rotation[index % len(camp_rotation)]
+        if side == "support":
+            thesis = frame["support_thesis"]
+        elif side == "oppose":
+            thesis = frame["oppose_thesis"]
+        else:
+            thesis = (
+                "Argue that the proposition turns on concrete conditions and "
+                f"separate the conditions under which it changes: {proposition}"
+            )
+        assignments[str(agent["id"])] = {
+            "side": side,
+            "role": role_map[side],
+            "thesis": thesis,
+            "keywords": _frame_terms(thesis)[:8],
+            "camp_function": camp_function,
+        }
+    return {"frame": frame, "assignments": assignments}
+
+
 class LLMGenerationError(RuntimeError):
     pass
 
@@ -123,6 +170,11 @@ def build_prompt(
 
     # Debate role (pro/con/neutral) — assigned at thread start, must not collapse
     debate_role = context.get("debate_role", "")
+    assigned_side = str(context.get("assigned_side", "")).strip()
+    assigned_side_label = str(context.get("assigned_side_label", "")).strip()
+    opposing_side_label = str(context.get("opposing_side_label", "")).strip()
+    side_contract = str(context.get("side_contract", "")).strip()
+    frame_proposition = str(context.get("frame_proposition", "")).strip()
     topic_short = thread_topic[:55] if thread_topic else "このテーマ"
     if debate_role == "pro":
         persona_text += f"【配役：賛成側】「{topic_short}」に対して「YES・その通りだ」という立場で発言せよ。反対側の意見に押し流されても立場を変えるな。\n"
@@ -139,6 +191,19 @@ def build_prompt(
     # Available arsenal items (not on cooldown)
     available_arsenal: list[dict[str, Any]] = context.get("available_arsenal", [])
     has_mission = bool(context.get("private_directive", ""))
+    if assigned_side:
+        persona_text += f"陣営: {assigned_side}"
+        if assigned_side_label:
+            persona_text += f" ({assigned_side_label})"
+        persona_text += "\n"
+    if frame_proposition:
+        persona_text += f"争点命題: {frame_proposition}\n"
+    if side_contract:
+        persona_text += f"このスレで守る立場: {side_contract}\n"
+    if assigned_side in {"support", "oppose"} and opposing_side_label:
+        persona_text += (
+            f"禁止: 明示的な stance=shift と譲歩なしに {opposing_side_label} 側の結論へ乗るな。\n"
+        )
     if available_arsenal:
         desc_list = [f"[{a['id']}]{a['desc']}" for a in available_arsenal[:4]]
         persona_text += f"使える武器: {' / '.join(desc_list)}"
@@ -236,6 +301,37 @@ def build_prompt(
     position_anchor_summary = str(context.get("position_anchor_summary", "")).strip()
     if position_anchor_summary:
         context_text += f"\n🪢 既存の立場アンカー: {position_anchor_summary}"
+    if assigned_side:
+        context_text += f"\n[assigned_side] {assigned_side}"
+        if assigned_side_label:
+            context_text += f" ({assigned_side_label})"
+    if side_contract:
+        context_text += f"\n[side_contract] {side_contract}"
+    if assigned_side in {"support", "oppose"}:
+        context_text += "\n[side_rule] Do not cross to the opposite side unless you explicitly use stance=shift and state the concession."
+    required_proposition_stance = str(context.get("required_proposition_stance", "")).strip()
+    if required_proposition_stance:
+        context_text += f"\n[required_proposition_stance] {required_proposition_stance}"
+    required_local_stance = str(context.get("required_local_stance", "")).strip()
+    if required_local_stance:
+        context_text += f"\n[required_local_stance] {required_local_stance}"
+    assigned_camp_function = str(context.get("assigned_camp_function", "")).strip()
+    if assigned_camp_function:
+        context_text += f"\n[camp_function] {assigned_camp_function}"
+    required_subquestion_id = str(context.get("required_subquestion_id", "")).strip()
+    if required_subquestion_id:
+        context_text += f"\n[required_subquestion_id] {required_subquestion_id}"
+    required_subquestion_text = str(context.get("required_subquestion_text", "")).strip()
+    if required_subquestion_text:
+        context_text += f"\n[required_subquestion] {required_subquestion_text}"
+    camp_map_summary = str(context.get("camp_map_summary", "")).strip()
+    if camp_map_summary:
+        context_text += f"\n[camp_map] {camp_map_summary}"
+    context_text += (
+        "\n[output_fields] Always return JSON with stance, local_stance_to_target, "
+        "proposition_stance, camp_function, main_axis, subquestion_id, shift_reason, "
+        "content, used_arsenal_id."
+    )
     pending_definition_terms = context.get("pending_definition_terms", [])[:3]
     if pending_definition_terms:
         context_text += f"\n📚 未解決の定義語: {' / '.join(pending_definition_terms)}"
@@ -256,6 +352,13 @@ def build_prompt(
 
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
+        {
+            "role": "system",
+            "content": (
+                "Output JSON only with keys: stance, local_stance_to_target, proposition_stance, "
+                "camp_function, main_axis, subquestion_id, shift_reason, content, used_arsenal_id."
+            ),
+        },
         {"role": "user", "content": persona_text + "\n\n" + context_text},
     ]
 
@@ -331,11 +434,23 @@ def _normalize_reply(payload: dict[str, Any]) -> dict[str, Any]:
     stance = payload.get("stance", "disagree")
     if stance not in {"disagree", "agree", "supplement", "shift"}:
         stance = "disagree"
+    proposition_stance = str(payload.get("proposition_stance", "")).strip()
+    if proposition_stance not in {"support", "oppose", "conditional", "shift"}:
+        proposition_stance = ""
+    local_stance_to_target = str(payload.get("local_stance_to_target", "")).strip()
+    if local_stance_to_target not in {"agree", "disagree", "supplement", "shift"}:
+        local_stance_to_target = stance if stance in {"agree", "disagree", "supplement", "shift"} else ""
+    camp_function = str(payload.get("camp_function", "")).strip()
     used_id = payload.get("used_arsenal_id")
     return {
         "reply_to": payload.get("reply_to"),  # kept for backward compat
         "stance": stance,
+        "local_stance_to_target": local_stance_to_target,
+        "proposition_stance": proposition_stance,
+        "camp_function": camp_function,
         "main_axis": str(payload.get("main_axis", "rationalism")),
+        "subquestion_id": str(payload.get("subquestion_id", "")).strip(),
+        "shift_reason": str(payload.get("shift_reason", "")).strip(),
         "content": str(payload.get("content", "")).strip(),
         "used_arsenal_id": str(used_id) if used_id and used_id != "null" else None,
     }
@@ -346,7 +461,12 @@ async def call_llm(messages: list[dict[str, str]]) -> dict[str, Any]:
         return {
             "reply_to": None,
             "stance": "disagree",
+            "local_stance_to_target": "disagree",
+            "proposition_stance": "",
+            "camp_function": "",
             "main_axis": "rationalism",
+            "subquestion_id": "",
+            "shift_reason": "",
             "content": "前提が粗い。論点を一つに絞り、誰が利益を得て誰がコストを払い、失敗時に何を撤回するのかまで示さなければ、賛否は判断できない。理念だけでは制度は動かないし、測定指標と撤退条件を欠く案は結局また感情論へ戻る。",
             "_token_usage": 0,
         }
@@ -428,6 +548,84 @@ async def assign_debate_roles(
         for i, agent in enumerate(agent_list):
             roles[agent["id"]] = ["pro", "con", "neutral"][i % 3]
         return roles
+
+
+async def assign_debate_frame(
+    topic: str,
+    agent_list: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not os.getenv("OPENAI_API_KEY") or not agent_list:
+        return _fallback_debate_frame(topic, agent_list)
+
+    lines = []
+    for agent in agent_list:
+        worldview = ", ".join(agent.get("worldview", [])[:2])
+        non_negotiable = agent.get("speech_constraints", {}).get("non_negotiable", "")[:80]
+        lines.append(
+            f'{agent["id"]}({agent["display_name"]}): worldview={worldview}. non_negotiable={non_negotiable}'
+        )
+
+    fallback = _fallback_debate_frame(topic, agent_list)
+    role_map = {"support": "pro", "oppose": "con", "conditional": "neutral"}
+
+    try:
+        response = await _get_client().chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Build one binary debate frame for the topic, then assign each agent to support, oppose, or conditional. "
+                        "Return JSON only. "
+                        'Schema: {"frame":{"proposition":"...","support_label":"...","oppose_label":"...","conditional_label":"...","support_thesis":"...","oppose_thesis":"..."},"assignments":{"agent_id":{"side":"support","role":"pro","thesis":"...","keywords":["..."],"camp_function":"innovation|competition|consumer_welfare|safety|power_concentration"}}}'
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"topic: {topic}\n\nagents:\n" + "\n".join(lines),
+                },
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=400,
+            temperature=0.3,
+        )
+        payload = json.loads(response.choices[0].message.content or "{}")
+        raw_frame = payload.get("frame", {}) if isinstance(payload, dict) else {}
+        raw_assignments = payload.get("assignments", {}) if isinstance(payload, dict) else {}
+    except Exception:
+        return fallback
+
+    frame = {
+        "proposition": str(raw_frame.get("proposition") or fallback["frame"]["proposition"]),
+        "support_label": str(raw_frame.get("support_label") or fallback["frame"]["support_label"]),
+        "oppose_label": str(raw_frame.get("oppose_label") or fallback["frame"]["oppose_label"]),
+        "conditional_label": str(raw_frame.get("conditional_label") or fallback["frame"]["conditional_label"]),
+        "support_thesis": str(raw_frame.get("support_thesis") or fallback["frame"]["support_thesis"]),
+        "oppose_thesis": str(raw_frame.get("oppose_thesis") or fallback["frame"]["oppose_thesis"]),
+    }
+    assignments: dict[str, dict[str, Any]] = {}
+    for agent in agent_list:
+        agent_id = str(agent["id"])
+        fallback_assignment = fallback["assignments"][agent_id]
+        raw_assignment = raw_assignments.get(agent_id, {}) if isinstance(raw_assignments, dict) else {}
+        side = str(raw_assignment.get("side") or fallback_assignment["side"])
+        if side not in {"support", "oppose", "conditional"}:
+            side = fallback_assignment["side"]
+        role = str(raw_assignment.get("role") or role_map[side])
+        if role not in {"pro", "con", "neutral"}:
+            role = role_map[side]
+        thesis = str(raw_assignment.get("thesis") or fallback_assignment["thesis"])
+        keywords = [str(v) for v in raw_assignment.get("keywords", []) if str(v).strip()]
+        if not keywords:
+            keywords = _frame_terms(thesis)[:8]
+        assignments[agent_id] = {
+            "side": side,
+            "role": role,
+            "thesis": thesis,
+            "keywords": keywords[:8],
+            "camp_function": str(raw_assignment.get("camp_function") or fallback_assignment.get("camp_function") or ""),
+        }
+    return {"frame": frame, "assignments": assignments}
 
 
 async def decompose_topic_axes(topic: str) -> list[str]:

@@ -7,6 +7,7 @@ from engine.discussion import (
     _classify_user_intervention,
     _build_conversation_summary,
     _get_phase,
+    _is_missing_debate_state_error,
     _prioritize_speaker,
     _role_for_phase,
     _select_debate_function,
@@ -40,6 +41,12 @@ def test_phase_transitions() -> None:
 def test_role_for_phase() -> None:
     assert _role_for_phase(1) == "counter"
     assert _role_for_phase(4) == "shift"
+
+
+def test_is_missing_debate_state_error_only_accepts_missing_relation_cases() -> None:
+    assert _is_missing_debate_state_error(RuntimeError('relation "debate_states" does not exist')) is True
+    assert _is_missing_debate_state_error(RuntimeError("42P01: relation missing")) is True
+    assert _is_missing_debate_state_error(RuntimeError("connection timeout")) is False
 
 
 def test_should_facilitate_on_early_definition_point() -> None:
@@ -118,6 +125,22 @@ def test_prioritize_speaker_prefers_definition_duty_over_other_obligations() -> 
         "requested_by": "c",
     }
     posts = [{"id": 1, "agent_id": "a"}, {"id": 2, "agent_id": "b"}]
+    agents = {aid: make_agent(aid) for aid in ("a", "b", "c")}
+
+    assert _prioritize_speaker(["a", "b", "c"], posts, debate, agents, {"a"}) == "b"
+
+
+def test_prioritize_speaker_prefers_priority_subquestion_over_other_obligations() -> None:
+    debate = DebateState()
+    debate.subquestions["sq:10:0"] = {
+        "subquestion_id": "sq:10:0",
+        "post_id": 10,
+        "target_agent_id": "b",
+        "status": "open",
+        "camp_function": "power_concentration",
+    }
+    debate.subquestion_order.append("sq:10:0")
+    posts = [{"id": 1, "agent_id": "a"}, {"id": 2, "agent_id": "c"}]
     agents = {aid: make_agent(aid) for aid in ("a", "b", "c")}
 
     assert _prioritize_speaker(["a", "b", "c"], posts, debate, agents, {"a"}) == "b"

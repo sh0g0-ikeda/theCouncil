@@ -73,6 +73,8 @@ def select_next_agent(
     recent_agents = {post["agent_id"] for post in posts[-6:] if post.get("agent_id")}
     current_tags = thread.get("topic_tags", [])
     last_vector = agents[last_agent_id].vector if last_agent_id in agents else None
+    last_side = debate_state.get_agent_side(last_agent_id) if debate_state is not None else ""
+    last_camp_function = debate_state.get_camp_function(last_agent_id) if debate_state is not None else ""
 
     scores: dict[str, float] = {}
     for agent_id in participant_ids:
@@ -98,12 +100,29 @@ def select_next_agent(
             debate_state is not None
             and debate_state.has_unused_arsenal(agent_id, agent.persona)
         ) else 0.0
+        side_diversity = 0.12 if (
+            debate_state is not None
+            and last_side
+            and debate_state.get_agent_side(agent_id)
+            and debate_state.get_agent_side(agent_id) != last_side
+        ) else 0.0
+        camp_function_penalty = 0.0
+        if (
+            debate_state is not None
+            and last_side
+            and last_camp_function
+            and debate_state.get_agent_side(agent_id) == last_side
+            and debate_state.get_camp_function(agent_id) == last_camp_function
+        ):
+            camp_function_penalty = 0.18
         score = (
             ALPHA * opposition
             + BETA * silence_bonus
             + GAMMA * topic_match
             + DELTA * diversity
             + arsenal_boost
+            + side_diversity
+            - camp_function_penalty
         )
         # Floor weight: everyone gets at least 0.15 to prevent complete lock-out
         scores[agent_id] = max(score, 0.15)
@@ -131,6 +150,11 @@ def select_target_post(
     speaker_vector = agents[speaker_id].vector
 
     if debate_state is not None:
+        priority_subquestion_post_id = getattr(debate_state, "get_priority_subquestion_post_id_for", lambda _aid: None)(speaker_id)
+        if priority_subquestion_post_id is not None:
+            target = next((post for post in reversed(posts) if post.get("id") == priority_subquestion_post_id), None)
+            if target is not None:
+                return target
         priority_post_id = debate_state.get_priority_post_id_for(speaker_id)
         if priority_post_id is not None:
             target = next((post for post in reversed(posts) if post.get("id") == priority_post_id), None)
@@ -146,6 +170,11 @@ def select_target_post(
 
     candidates: list[dict[str, Any]] = []
     weights: list[float] = []
+    preferred_side = ""
+    if debate_state is not None:
+        speaker_side = debate_state.get_agent_side(speaker_id)
+        if speaker_side in {"support", "oppose"}:
+            preferred_side = debate_state.get_opposing_side(speaker_id)
 
     seen_agents: set[str] = set()
     for i, post in enumerate(reversed(posts[-20:])):
@@ -164,11 +193,26 @@ def select_target_post(
         # Halve weight if this post was just targeted by the previous speaker
         if post.get("id") == last_target_id:
             weight *= 0.3
+        if preferred_side:
+            target_side = debate_state.get_agent_side(agent_id)
+            if target_side == preferred_side:
+                weight *= 1.35
+            elif target_side and target_side == debate_state.get_agent_side(speaker_id):
+                weight *= 0.7
         candidates.append(post)
         weights.append(weight)
 
     if not candidates:
         return None
+    if preferred_side:
+        preferred_pairs = [
+            (post, weight)
+            for post, weight in zip(candidates, weights)
+            if debate_state.get_agent_side(post.get("agent_id")) == preferred_side
+        ]
+        if preferred_pairs:
+            candidates = [post for post, _ in preferred_pairs]
+            weights = [weight for _, weight in preferred_pairs]
     return random.choices(candidates, weights=weights)[0]
 
 

@@ -11,7 +11,7 @@ from typing import Any
 
 from db.client import get_db
 from engine.facilitator import make_facilitate
-from engine.llm import LLMGenerationError, assign_debate_roles, compress_history, decompose_topic_axes
+from engine.llm import LLMGenerationError, assign_debate_frame, compress_history, decompose_topic_axes
 from engine.debate_state import DebateState
 from engine.selector import select_conflict_axis, select_next_agent, select_silent_agent, select_target_post
 from engine.validator import SemanticPostAnalysis, summarize_target_claim
@@ -36,6 +36,11 @@ _MORAL_KEYWORDS = {"差別", "倫理", "道徳", "人権", "正義", "に決ま�
 def _is_moral_suction(content: str) -> bool:
     """Return True if a post is likely to pull agents into unproductive moral discourse."""
     return sum(1 for kw in _MORAL_KEYWORDS if kw in content) >= 2
+
+
+def _is_missing_debate_state_error(exc: Exception) -> bool:
+    text = str(exc or "").lower()
+    return "42p01" in text or "relation" in text or "does not exist" in text
 
 
 def _extract_directive_type(text: str) -> str:
@@ -362,13 +367,16 @@ async def run_discussion(
     meta_intervention_kind = ""
     try:
         saved_state = await db.load_debate_state(thread_id)
-    except Exception:
-        logger.warning("load_debate_state failed (table may not exist yet)", exc_info=True)
-        saved_state = None
+    except Exception as exc:
+        if _is_missing_debate_state_error(exc):
+            logger.warning("load_debate_state skipped because debate state storage is unavailable", exc_info=True)
+            saved_state = None
+        else:
+            raise
     debate = DebateState.from_dict(saved_state) if saved_state else DebateState()
     last_speaker_id: str | None = None
     event_counter = 0
-    roles_initialized = debate.roles_initialized()
+    roles_initialized = debate.roles_initialized() and bool(debate.get_debate_frame())
     moral_suction_active = 0  # countdown: resist moral framing for N more posts
 
     try:
@@ -390,14 +398,22 @@ async def run_discussion(
                     if aid in agents
                 ]
                 try:
-                    roles, axes = await asyncio.gather(
-                        assign_debate_roles(thread["topic"], agent_list),
+                    debate_frame, axes = await asyncio.gather(
+                        assign_debate_frame(thread["topic"], agent_list),
                         decompose_topic_axes(thread["topic"]),
                     )
-                    debate.set_debate_roles(roles)
+                    frame_payload = debate_frame.get("frame", {}) if isinstance(debate_frame, dict) else {}
+                    assignments = debate_frame.get("assignments", {}) if isinstance(debate_frame, dict) else {}
+                    debate.set_debate_frame(frame_payload, assignments)
                     debate.set_topic_axes(_sanitize_topic_axes(axes, thread["topic"], thread.get("topic_tags", [])))
                     roles_initialized = True
-                    logger.info("roles=%s axes=%s thread=%s", roles, axes, thread_id)
+                    logger.info(
+                        "frame=%s assignments=%s axes=%s thread=%s",
+                        frame_payload,
+                        {k: v.get('side') for k, v in assignments.items()},
+                        axes,
+                        thread_id,
+                    )
                 except Exception:
                     logger.warning("role/axis init failed", exc_info=True)
                     roles_initialized = True  # don't retry on error
@@ -462,6 +478,9 @@ async def run_discussion(
                     ax_assignments = facilitate.get("axis_assignments", [])
                     if ax_assignments:
                         debate.push_axis_assignments(ax_assignments)
+                    followup_assignments = facilitate.get("followup_assignments", [])
+                    if followup_assignments:
+                        debate.push_followup_assignments([dict(item) for item in followup_assignments if isinstance(item, dict)])
                     # Store facilitator constraint (next N posts must...)
                     constraint_text = str(facilitate.get("constraint", "")).strip()
                     if constraint_text:
@@ -587,6 +606,10 @@ async def run_discussion(
             stance_drift = debate.is_stance_drifting(speaker_id)
             arsenal_novelty = debate.has_unused_arsenal(speaker_id, agents[speaker_id].persona)
             debate_role = debate.get_debate_role(speaker_id)
+            assigned_side = debate.get_agent_side(speaker_id)
+            assigned_camp_function = debate.get_camp_function(speaker_id)
+            debate_frame = debate.get_debate_frame()
+            side_contract = debate.get_side_contract(speaker_id)
             forced_axis = debate.peek_forced_axis(speaker_id)
             private_directive = debate.peek_directive(speaker_id)
             active_constraint, active_constraint_kind = debate.peek_constraint()
@@ -595,10 +618,20 @@ async def run_discussion(
             uncovered_axes = debate.get_uncovered_axes()
             pending_definition_terms = debate.get_unresolved_terms()
             target_claim_units = debate.get_claim_units_for_post(target.get("id") if target else None)
+            priority_subquestion = debate.get_priority_subquestion_for(speaker_id)
             position_anchor = debate.get_position_anchor(speaker_id)
             retrieval_mode = _determine_retrieval_mode(debate_fn, pending_definition_terms, active_constraint_kind)
             is_user_post_reply = ((user_reply_pending > 0 or meta_reply_pending > 0) and target is not None and target.get("user_id") is not None)
             target_is_moral = is_user_post_reply and _is_moral_suction(target.get("content", "") if target else "")
+            required_local_stance = ""
+            target_side = debate.get_agent_side(target_id) if target_id else ""
+            if target_side and assigned_side in {"support", "oppose"} and target_side in {"support", "oppose"}:
+                required_local_stance = "disagree" if target_side != assigned_side else ""
+            camp_map_summary = " / ".join(
+                f"{aid}:{debate.get_agent_side(aid)}:{debate.get_camp_function(aid)}"
+                for aid in thread["agent_ids"]
+                if aid in agents
+            )
             context = {
                 "thread_topic": thread["topic"],
                 "current_tags": thread["topic_tags"],
@@ -615,6 +648,17 @@ async def run_discussion(
                 "stagnation": stagnating,
                 "newcomer_event": newcomer_hint,
                 "debate_role": debate_role,
+                "assigned_side": assigned_side,
+                "assigned_side_label": debate_frame.get(f"{assigned_side}_label", "") if assigned_side else "",
+                "opposing_side_label": debate_frame.get(f"{debate.get_opposing_side(speaker_id)}_label", ""),
+                "side_contract": str(side_contract.get("thesis", "")),
+                "assigned_camp_function": assigned_camp_function,
+                "frame_proposition": debate_frame.get("proposition", ""),
+                "support_label": debate_frame.get("support_label", ""),
+                "oppose_label": debate_frame.get("oppose_label", ""),
+                "conditional_label": debate_frame.get("conditional_label", ""),
+                "support_thesis": debate_frame.get("support_thesis", ""),
+                "oppose_thesis": debate_frame.get("oppose_thesis", ""),
                 "forced_axis": forced_axis or "",
                 "private_directive": private_directive or "",
                 "active_constraint": active_constraint or "",
@@ -631,14 +675,21 @@ async def run_discussion(
                 "target_claim_summary": summarize_target_claim(target or {}, axis),
                 "target_claim_units": target_claim_units,
                 "target_debate_role": debate.get_debate_role(target_id) if target_id else "",
+                "target_side": target_side,
                 "pending_definition_terms": pending_definition_terms,
                 "recent_argument_fingerprints": debate.recent_argument_fingerprints[-6:],
                 "forbidden_example_keys": debate.recent_example_keys[-4:],
                 "required_response_kind": debate_fn,
+                "required_proposition_stance": assigned_side if assigned_side in {"support", "oppose"} else "",
+                "required_local_stance": required_local_stance,
+                "required_subquestion_id": str(priority_subquestion.get("subquestion_id", "")) if priority_subquestion else "",
+                "required_subquestion_text": str(priority_subquestion.get("text", "")) if priority_subquestion else "",
+                "camp_map_summary": camp_map_summary,
                 "retrieval_mode": retrieval_mode,
                 "meta_intervention_kind": meta_intervention_kind if meta_reply_pending > 0 else "",
                 "position_anchor_summary": str(position_anchor.get("summary", "")),
                 "position_anchor_terms": list(position_anchor.get("terms", [])),
+                "position_anchor_side": str(position_anchor.get("side", "")),
             }
 
             try:
@@ -721,6 +772,8 @@ def _prioritize_speaker(
 ) -> str | None:
     """Return a deterministic obligation-first speaker, or None."""
     last_2 = {p["agent_id"] for p in posts[-2:] if p.get("agent_id")}
+    last_ai_speaker = next((p.get("agent_id") for p in reversed(posts) if p.get("agent_id")), None)
+    last_side = debate.get_agent_side(last_ai_speaker) if last_ai_speaker else ""
     post_counts = {
         agent_id: sum(1 for post in posts if post.get("agent_id") == agent_id)
         for agent_id in participant_ids
@@ -730,7 +783,9 @@ def _prioritize_speaker(
         if agent_id not in agents_dict or agent_id in excluded:
             continue
 
-        if debate.has_pending_definition_response(agent_id):
+        if debate.get_priority_subquestion_for(agent_id):
+            obligation = 6
+        elif debate.has_pending_definition_response(agent_id):
             obligation = 5
         elif debate.has_open_attack_against(agent_id):
             obligation = 4
@@ -756,9 +811,18 @@ def _prioritize_speaker(
         else:
             repeated_axis_penalty = 0
         recent_speaker_penalty = 1 if agent_id in last_2 else 0
+        same_side_penalty = 1 if last_side and debate.get_agent_side(agent_id) == last_side else 0
+        same_camp_penalty = 1 if (
+            last_side
+            and debate.get_agent_side(agent_id) == last_side
+            and debate.get_camp_function(agent_id)
+            and debate.get_camp_function(agent_id) == debate.get_camp_function(last_ai_speaker)
+        ) else 0
         rank = (
             -obligation,
             recent_speaker_penalty,
+            same_side_penalty,
+            same_camp_penalty,
             repeated_axis_penalty,
             post_counts.get(agent_id, 0),
             agent_id,

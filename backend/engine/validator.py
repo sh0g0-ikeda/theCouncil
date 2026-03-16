@@ -75,6 +75,11 @@ _TOPIC_STOPWORDS = {
 class SemanticPostAnalysis:
     effective_axis: str
     effective_function: str
+    aligned_side: str
+    proposition_stance: str
+    local_stance_to_target: str
+    camp_function: str
+    subquestion_id: str
     addresses_target: bool
     target_overlap: float
     answered_post_ids: list[int]
@@ -90,6 +95,11 @@ class SemanticPostAnalysis:
         return {
             "effective_axis": self.effective_axis,
             "effective_function": self.effective_function,
+            "aligned_side": self.aligned_side,
+            "proposition_stance": self.proposition_stance,
+            "local_stance_to_target": self.local_stance_to_target,
+            "camp_function": self.camp_function,
+            "subquestion_id": self.subquestion_id,
             "addresses_target": self.addresses_target,
             "target_overlap": self.target_overlap,
             "answered_post_ids": self.answered_post_ids,
@@ -107,6 +117,11 @@ class SemanticPostAnalysis:
         return cls(
             effective_axis=str(payload.get("effective_axis", "")),
             effective_function=str(payload.get("effective_function", "")),
+            aligned_side=str(payload.get("aligned_side", "")),
+            proposition_stance=str(payload.get("proposition_stance", "")),
+            local_stance_to_target=str(payload.get("local_stance_to_target", "")),
+            camp_function=str(payload.get("camp_function", "")),
+            subquestion_id=str(payload.get("subquestion_id", "")),
             addresses_target=bool(payload.get("addresses_target", False)),
             target_overlap=float(payload.get("target_overlap", 0.0)),
             answered_post_ids=[int(v) for v in payload.get("answered_post_ids", [])],
@@ -317,6 +332,57 @@ def _target_claim_units_from_text(target_content: str, effective_axis: str) -> l
     return normalized
 
 
+def _frame_side_terms(context: dict[str, Any], side: str) -> set[str]:
+    if side not in {"support", "oppose", "conditional"}:
+        return set()
+    text = " ".join(
+        [
+            str(context.get("frame_proposition", "")),
+            str(context.get(f"{side}_thesis", "")),
+            str(context.get(f"{side}_label", "")),
+        ]
+    )
+    return set(_keywords(text, limit=12)) | set(_tokenize(text))
+
+
+def _infer_aligned_side(reply: dict[str, Any], context: dict[str, Any], reply_keywords: set[str]) -> str:
+    support_terms = _frame_side_terms(context, "support")
+    oppose_terms = _frame_side_terms(context, "oppose")
+    if not support_terms and not oppose_terms:
+        return ""
+
+    stance = str(reply.get("stance", "disagree"))
+    target_side = str(context.get("target_side", "")).strip()
+    shared_terms = support_terms & oppose_terms
+    support_unique = support_terms - shared_terms
+    oppose_unique = oppose_terms - shared_terms
+    support_score = float(len(reply_keywords & support_unique) * 2 + len(reply_keywords & support_terms) * 0.25)
+    oppose_score = float(len(reply_keywords & oppose_unique) * 2 + len(reply_keywords & oppose_terms) * 0.25)
+    lowered = str(reply.get("content", "")).lower()
+    support_label = str(context.get("support_label", "")).strip().lower()
+    oppose_label = str(context.get("oppose_label", "")).strip().lower()
+    if support_label and support_label in lowered:
+        support_score += 2.5
+    if oppose_label and oppose_label in lowered:
+        oppose_score += 2.5
+    if target_side in {"support", "oppose"}:
+        if stance in {"agree", "supplement"}:
+            if target_side == "support":
+                support_score += 1.5
+            else:
+                oppose_score += 1.5
+        elif stance in {"disagree", "shift"}:
+            if target_side == "support":
+                oppose_score += 1.5
+            else:
+                support_score += 1.5
+    if support_score <= 0.0 and oppose_score <= 0.0:
+        return ""
+    if support_score == oppose_score:
+        return ""
+    return "support" if support_score > oppose_score else "oppose"
+
+
 def classify_reply_semantics(reply: dict[str, Any], context: dict[str, Any]) -> SemanticPostAnalysis:
     target_post = context.get("target_post", {}) or {}
     target_content = str(target_post.get("content", "")).strip()
@@ -333,6 +399,18 @@ def classify_reply_semantics(reply: dict[str, Any], context: dict[str, Any]) -> 
     reply_keywords = set(_keywords(reply_content, limit=10))
     overlap_terms = sorted(target_keywords & reply_keywords)
     overlap_score = len(overlap_terms) / max(len(target_keywords), 1) if target_keywords else 0.0
+    proposition_stance = str(reply.get("proposition_stance", "")).strip()
+    if proposition_stance not in {"support", "oppose", "conditional", "shift"}:
+        proposition_stance = ""
+    local_stance_to_target = str(reply.get("local_stance_to_target", "")).strip()
+    if local_stance_to_target not in {"agree", "disagree", "supplement", "shift"}:
+        fallback_local_stance = str(reply.get("stance", "disagree")).strip()
+        local_stance_to_target = fallback_local_stance if fallback_local_stance in {"agree", "disagree", "supplement", "shift"} else ""
+    assigned_camp_function = str(context.get("assigned_camp_function", "")).strip()
+    camp_function = str(reply.get("camp_function", "")).strip() or assigned_camp_function
+    required_subquestion_id = str(context.get("required_subquestion_id", "")).strip()
+    subquestion_id = str(reply.get("subquestion_id", "")).strip() or required_subquestion_id
+    aligned_side = proposition_stance if proposition_stance in {"support", "oppose"} else _infer_aligned_side(reply, context, reply_keywords)
 
     definition_requests = _extract_definition_requests(reply_content)
     definition_terms = _extract_definition_terms(reply_content, pending_terms)
@@ -387,6 +465,11 @@ def classify_reply_semantics(reply: dict[str, Any], context: dict[str, Any]) -> 
     return SemanticPostAnalysis(
         effective_axis=effective_axis,
         effective_function=effective_function,
+        aligned_side=aligned_side,
+        proposition_stance=proposition_stance,
+        local_stance_to_target=local_stance_to_target,
+        camp_function=camp_function,
+        subquestion_id=subquestion_id,
         addresses_target=addresses_target,
         target_overlap=overlap_score,
         answered_post_ids=answered_post_ids,
@@ -434,6 +517,33 @@ def validate_generated_reply(reply: dict[str, Any], context: dict[str, Any]) -> 
     if pending_terms and required_kind in {"define", "differentiate"} and not analysis.definition_terms:
         return ValidationResult(False, f"Resolve at least one pending term: {' / '.join(pending_terms[:2])}.", analysis)
 
+    assigned_side = str(context.get("assigned_side", "")).strip()
+    assigned_side_label = str(context.get("assigned_side_label", "")).strip() or assigned_side
+    if stance == "shift" and assigned_side in {"support", "oppose"} and not str(reply.get("shift_reason", "")).strip():
+        return ValidationResult(False, "When shifting sides, explain the concession in shift_reason.", analysis)
+    if (
+        not meta_intervention_kind
+        and assigned_side in {"support", "oppose"}
+        and stance != "shift"
+        and analysis.proposition_stance != assigned_side
+    ):
+        if not analysis.proposition_stance:
+            return ValidationResult(False, f"State proposition_stance explicitly as {assigned_side}.", analysis)
+        return ValidationResult(False, f"Stay on the {assigned_side_label} side unless you explicitly use shift.", analysis)
+
+    if target_post.get("content") and not meta_intervention_kind and not analysis.local_stance_to_target:
+        return ValidationResult(False, "Set local_stance_to_target explicitly for this reply.", analysis)
+
+    assigned_camp_function = str(context.get("assigned_camp_function", "")).strip()
+    if assigned_camp_function and not analysis.camp_function:
+        return ValidationResult(False, f"State camp_function explicitly as {assigned_camp_function}.", analysis)
+    if assigned_camp_function and analysis.camp_function and analysis.camp_function != assigned_camp_function:
+        return ValidationResult(False, f"Stay within your camp_function: {assigned_camp_function}.", analysis)
+
+    required_subquestion_id = str(context.get("required_subquestion_id", "")).strip()
+    if required_subquestion_id and analysis.subquestion_id != required_subquestion_id:
+        return ValidationResult(False, f"Answer subquestion {required_subquestion_id} directly.", analysis)
+
     recent_fingerprints = {str(v) for v in context.get("recent_argument_fingerprints", []) if str(v).strip()}
     if analysis.argument_fingerprint and analysis.argument_fingerprint in recent_fingerprints:
         return ValidationResult(False, "Use a genuinely different argument structure.", analysis)
@@ -461,10 +571,32 @@ def validate_generated_reply(reply: dict[str, Any], context: dict[str, Any]) -> 
 
     debate_role = str(context.get("debate_role", "")).strip()
     target_role = str(context.get("target_debate_role", "")).strip()
+    target_side = str(context.get("target_side", "")).strip()
     position_anchor_terms = {
         str(term) for term in context.get("position_anchor_terms", [])
         if str(term).strip()
     }
+    if (
+        not meta_intervention_kind
+        and assigned_side in {"support", "oppose"}
+        and analysis.aligned_side
+        and analysis.aligned_side != assigned_side
+        and stance != "shift"
+    ):
+        return ValidationResult(
+            False,
+            f"Stay on the {assigned_side_label} side unless you explicitly use shift.",
+            analysis,
+        )
+    if (
+        not meta_intervention_kind
+        and context.get("is_first_post")
+        and assigned_side in {"support", "oppose"}
+        and stance != "shift"
+        and not analysis.aligned_side
+        and not (position_anchor_terms & set(analysis.referenced_terms))
+    ):
+        return ValidationResult(False, "State your assigned side's thesis explicitly in the opening post.", analysis)
     if (
         not meta_intervention_kind
         and debate_role in {"pro", "con"}
@@ -475,5 +607,13 @@ def validate_generated_reply(reply: dict[str, Any], context: dict[str, Any]) -> 
         reply_terms = set(analysis.referenced_terms)
         if not position_anchor_terms or not (position_anchor_terms & reply_terms):
             return ValidationResult(False, "Do not align with the opposite side without an explicit shift.", analysis)
+    if (
+        not meta_intervention_kind
+        and assigned_side in {"support", "oppose"}
+        and target_side in {"support", "oppose"}
+        and target_side != assigned_side
+        and stance in {"agree", "supplement"}
+    ):
+        return ValidationResult(False, "Do not endorse the opposite camp without an explicit shift.", analysis)
 
     return ValidationResult(True, "", analysis)
