@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 PLAN_MAX_POSTS = {
-    "free": 30,
+    "free": 50,
     "pro": 100,
     "ultra": 200,
 }

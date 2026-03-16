@@ -4,11 +4,13 @@ import random
 
 from engine.debate_state import DebateState
 from engine.discussion import (
+    _classify_user_intervention,
     _build_conversation_summary,
     _get_phase,
     _prioritize_speaker,
     _role_for_phase,
     _select_debate_function,
+    _sanitize_topic_axes,
     _should_facilitate,
 )
 from models.agent import Agent, IdeologyVector
@@ -70,6 +72,20 @@ def test_conversation_summary_prefers_compressed_history_when_present() -> None:
 
     assert "older summary" in summary
     assert "socrates" in summary
+
+
+def test_classify_user_intervention_detects_summary_request() -> None:
+    assert _classify_user_intervention("結局論点はなんや。まとめてくれ。") == "summarize"
+
+
+def test_sanitize_topic_axes_prefers_topic_tags_when_generated_axes_are_off_topic() -> None:
+    axes = _sanitize_topic_axes(
+        ["国際法上の合法性", "正戦論的許容性"],
+        "日本の責任ある積極財政は正しいか",
+        ["財政持続性", "インフレリスク", "雇用"],
+    )
+
+    assert axes[:2] == ["財政持続性", "インフレリスク"]
 
 
 def test_prioritize_speaker_prefers_priority_claims() -> None:

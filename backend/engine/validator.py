@@ -258,13 +258,76 @@ def summarize_target_claim(target_post: dict[str, Any], conflict_axis: str) -> s
     return f"{speaker} claim on {conflict_axis}: {content.replace(chr(10), ' ')[:90]}"
 
 
+def _axis_candidates(context: dict[str, Any]) -> list[str]:
+    candidates: list[str] = []
+    for raw in (
+        list(context.get("current_tags", []))
+        + list(context.get("topic_axes", []))
+        + [context.get("forced_axis", ""), context.get("conflict_axis", "")]
+    ):
+        axis = str(raw or "").strip()
+        if axis and axis not in candidates:
+            candidates.append(axis)
+    return candidates
+
+
+def _axis_similarity(raw_axis: str, candidate: str, context: dict[str, Any]) -> float:
+    raw_terms = set(_keywords(raw_axis, limit=6)) | set(_tokenize(raw_axis))
+    candidate_terms = set(_keywords(candidate, limit=6)) | set(_tokenize(candidate))
+    topic_text = " ".join(
+        [
+            str(context.get("thread_topic", "")),
+            " ".join(str(tag) for tag in context.get("current_tags", [])),
+            str(context.get("target_post", {}).get("content", "")),
+        ]
+    )
+    topic_terms = set(_keywords(topic_text, limit=12)) | set(_tokenize(topic_text))
+    raw_topic_overlap = len(raw_terms & topic_terms)
+    candidate_topic_overlap = len(candidate_terms & topic_terms)
+    raw_candidate_overlap = len(raw_terms & candidate_terms)
+    return raw_candidate_overlap * 2.0 + candidate_topic_overlap - raw_topic_overlap * 0.5
+
+
+def _normalize_axis_label(raw_axis: str, context: dict[str, Any]) -> str:
+    axis = str(raw_axis or "").strip()
+    candidates = _axis_candidates(context)
+    if not candidates:
+        return axis or str(context.get("conflict_axis", "") or "rationalism")
+    if not axis:
+        return candidates[0]
+    for candidate in candidates:
+        if axis == candidate or axis.lower() == candidate.lower():
+            return candidate
+    best = max(candidates, key=lambda candidate: (_axis_similarity(axis, candidate, context), -len(candidate)))
+    return best
+
+
+def _target_claim_units_from_text(target_content: str, effective_axis: str) -> list[dict[str, Any]]:
+    units = _extract_claim_units(target_content, effective_axis, limit=2)
+    normalized: list[dict[str, Any]] = []
+    for idx, unit in enumerate(units):
+        normalized.append(
+            {
+                "claim_id": f"target:{idx}",
+                "claim_key": str(unit.get("claim_key", "")),
+                "text": str(unit.get("text", "")),
+                "terms": [str(term) for term in unit.get("terms", [])],
+            }
+        )
+    return normalized
+
+
 def classify_reply_semantics(reply: dict[str, Any], context: dict[str, Any]) -> SemanticPostAnalysis:
     target_post = context.get("target_post", {}) or {}
     target_content = str(target_post.get("content", "")).strip()
     reply_content = str(reply.get("content", "")).strip()
     pending_terms = [str(term) for term in context.get("pending_definition_terms", []) if str(term).strip()]
     effective_function = str(context.get("required_response_kind") or context.get("debate_function") or "attack")
-    effective_axis = str(reply.get("main_axis") or context.get("forced_axis") or context.get("conflict_axis") or "rationalism")
+    meta_intervention_kind = str(context.get("meta_intervention_kind", "")).strip()
+    effective_axis = _normalize_axis_label(
+        str(reply.get("main_axis") or context.get("forced_axis") or context.get("conflict_axis") or "rationalism"),
+        context,
+    )
 
     target_keywords = set(_keywords(target_content, limit=6))
     reply_keywords = set(_keywords(reply_content, limit=10))
@@ -276,13 +339,17 @@ def classify_reply_semantics(reply: dict[str, Any], context: dict[str, Any]) -> 
     definition_response_mode = effective_function in {"define", "differentiate"}
 
     target_claim_units = [dict(unit) for unit in context.get("target_claim_units", []) if isinstance(unit, dict)]
+    if not target_claim_units and target_content:
+        target_claim_units = _target_claim_units_from_text(target_content, effective_axis)
     answered_claim_ids: list[str] = []
+    best_claim_overlap = 0.0
     for unit in target_claim_units:
         claim_id = str(unit.get("claim_id") or unit.get("claim_key") or "").strip()
         terms = {str(term) for term in unit.get("terms", []) if str(term).strip()}
         if not terms:
             terms = set(_keywords(str(unit.get("text", "")), limit=6))
         unit_overlap = len(terms & reply_keywords) / max(len(terms), 1) if terms else 0.0
+        best_claim_overlap = max(best_claim_overlap, unit_overlap)
         if unit_overlap > 0.0 or (
             definition_response_mode
             and any(term in str(unit.get("text", "")) for term in definition_terms)
@@ -290,12 +357,14 @@ def classify_reply_semantics(reply: dict[str, Any], context: dict[str, Any]) -> 
             if claim_id:
                 answered_claim_ids.append(claim_id)
 
-    requires_strict_targeting = effective_function in {"attack", "steelman"}
+    requires_strict_targeting = bool(target_content) and not meta_intervention_kind
+    definition_only_pass = definition_response_mode and bool(definition_terms)
+    target_match_score = max(overlap_score, best_claim_overlap)
     addresses_target = (
         not target_content
         or not requires_strict_targeting
-        or overlap_score > 0.0
-        or (definition_response_mode and bool(definition_terms))
+        or target_match_score > 0.0
+        or definition_only_pass
         or bool(answered_claim_ids)
     )
 
@@ -335,6 +404,8 @@ def validate_generated_reply(reply: dict[str, Any], context: dict[str, Any]) -> 
     analysis = classify_reply_semantics(reply, context)
     directive_type = _extract_directive_type(str(context.get("private_directive", "")))
     constraint_kind = str(context.get("active_constraint_kind", "")).strip()
+    constraint_schema = dict(context.get("active_constraint_schema") or {})
+    meta_intervention_kind = str(context.get("meta_intervention_kind", "")).strip()
     stance = str(reply.get("stance", "disagree"))
     recent_axes = [str(axis) for axis in context.get("agent_recent_axes", [])]
     target_post = context.get("target_post", {}) or {}
@@ -343,7 +414,7 @@ def validate_generated_reply(reply: dict[str, Any], context: dict[str, Any]) -> 
     if forced_axis and analysis.effective_axis != forced_axis:
         return ValidationResult(False, f"Use {forced_axis} as the main axis.", analysis)
 
-    if target_post.get("content") and not analysis.addresses_target:
+    if target_post.get("content") and not analysis.addresses_target and not meta_intervention_kind:
         return ValidationResult(False, "Answer the target post's core claim directly.", analysis)
 
     if directive_type in {"rebut_core_claim", "deepen_axis"} and target_post.get("content") and not analysis.addresses_target:
@@ -372,10 +443,37 @@ def validate_generated_reply(reply: dict[str, Any], context: dict[str, Any]) -> 
     if repeated_examples:
         return ValidationResult(False, f"Do not reuse { ' / '.join(repeated_examples[:2]) } again right now.", analysis)
 
+    allowed_axes = [str(axis) for axis in constraint_schema.get("allowed_axes", []) if str(axis).strip()]
+    if allowed_axes and analysis.effective_axis not in allowed_axes:
+        return ValidationResult(False, f"Stay on one of these axes only: {' / '.join(allowed_axes[:2])}.", analysis)
+
+    if constraint_schema.get("must_address_target") and target_post.get("content") and not analysis.addresses_target:
+        return ValidationResult(False, "Address the current target directly.", analysis)
+
+    if constraint_schema.get("must_include_tradeoff") and not _has_tradeoff_markers(str(reply.get("content", ""))):
+        return ValidationResult(False, "State a concrete tradeoff or cost.", analysis)
+
     if constraint_kind == "tradeoff" and not _has_tradeoff_markers(str(reply.get("content", ""))):
         return ValidationResult(False, "State a concrete tradeoff or cost.", analysis)
 
     if constraint_kind == "refocus" and target_post.get("content") and analysis.target_overlap <= 0.0 and not analysis.definition_terms:
         return ValidationResult(False, "Refocus on the target claim instead of drifting away.", analysis)
+
+    debate_role = str(context.get("debate_role", "")).strip()
+    target_role = str(context.get("target_debate_role", "")).strip()
+    position_anchor_terms = {
+        str(term) for term in context.get("position_anchor_terms", [])
+        if str(term).strip()
+    }
+    if (
+        not meta_intervention_kind
+        and debate_role in {"pro", "con"}
+        and target_role in {"pro", "con"}
+        and target_role != debate_role
+        and stance in {"agree", "supplement"}
+    ):
+        reply_terms = set(analysis.referenced_terms)
+        if not position_anchor_terms or not (position_anchor_terms & reply_terms):
+            return ValidationResult(False, "Do not align with the opposite side without an explicit shift.", analysis)
 
     return ValidationResult(True, "", analysis)

@@ -21,6 +21,13 @@ logger = logging.getLogger(__name__)
 
 agents: dict[str, Agent] = {}
 _discussion_tasks: dict[str, asyncio.Task[None]] = {}
+_TOKEN_PATTERN = re.compile(r"[\w\u3040-\u30ff\u3400-\u9fff]+", re.UNICODE)
+_META_SUMMARY_PATTERNS = (
+    re.compile(r"(?:結局|要するに).*(?:論点|争点)"),
+    re.compile(r"(?:論点|争点).*(?:何|どこ)"),
+    re.compile(r"(?:まとめ|整理|要約)"),
+    re.compile(r"(?:止まった|続けて)"),
+)
 
 # Keywords that indicate a moralistic/discussion-stopping post
 _MORAL_KEYWORDS = {"差別", "倫理", "道徳", "人権", "正義", "に決まって", "絶対悪", "許されない", "当然", "べきでない"}
@@ -34,6 +41,87 @@ def _is_moral_suction(content: str) -> bool:
 def _extract_directive_type(text: str) -> str:
     match = re.search(r"MISSION:([a-z_]+)", text or "")
     return match.group(1) if match else ""
+
+
+def _tokenize(text: str) -> set[str]:
+    return {token.lower() for token in _TOKEN_PATTERN.findall(text or "")}
+
+
+def _sanitize_topic_axes(raw_axes: list[str], thread_topic: str, topic_tags: list[str]) -> list[str]:
+    candidates: list[str] = []
+    for axis in raw_axes:
+        value = str(axis or "").strip()
+        if value and value not in candidates:
+            candidates.append(value)
+    tag_axes = [str(tag).strip() for tag in topic_tags if str(tag).strip()]
+    if not candidates:
+        return tag_axes[:6] or ["rationalism"]
+
+    topic_terms = _tokenize(" ".join([thread_topic, *tag_axes]))
+
+    def relevance(axis: str) -> int:
+        return len(_tokenize(axis) & topic_terms)
+
+    relevant = [axis for axis in candidates if relevance(axis) > 0]
+    if relevant:
+        merged = relevant + [tag for tag in tag_axes if tag not in relevant]
+        return merged[:6]
+    if tag_axes:
+        merged: list[str] = []
+        for axis in tag_axes + candidates:
+            if axis and axis not in merged:
+                merged.append(axis)
+        return merged[:6]
+    return candidates[:6]
+
+
+def _classify_user_intervention(content: str) -> str:
+    text = str(content or "").strip()
+    if not text:
+        return ""
+    for pattern in _META_SUMMARY_PATTERNS:
+        if pattern.search(text):
+            return "summarize"
+    return ""
+
+
+def _select_meta_speaker(
+    participant_ids: list[str],
+    posts: list[dict[str, Any]],
+    agents_dict: dict[str, Agent],
+    excluded: set[str],
+) -> str:
+    post_counts = {
+        agent_id: sum(1 for post in posts if post.get("agent_id") == agent_id)
+        for agent_id in participant_ids
+    }
+    last_2 = {post["agent_id"] for post in posts[-2:] if post.get("agent_id")}
+
+    def preference_rank(agent_id: str) -> int:
+        preference = str(agents_dict[agent_id].persona.get("debate_function_preference", ""))
+        if preference == "synthesize":
+            return 0
+        if preference == "differentiate":
+            return 1
+        if preference == "concretize":
+            return 2
+        return 3
+
+    ranked: list[tuple[tuple[int, int, int, str], str]] = []
+    for agent_id in participant_ids:
+        if agent_id not in agents_dict or agent_id in excluded:
+            continue
+        rank = (
+            1 if agent_id in last_2 else 0,
+            preference_rank(agent_id),
+            post_counts.get(agent_id, 0),
+            agent_id,
+        )
+        ranked.append((rank, agent_id))
+    if not ranked:
+        raise ValueError("No eligible agents available")
+    ranked.sort(key=lambda item: item[0])
+    return ranked[0][1]
 
 
 def _determine_retrieval_mode(
@@ -268,7 +356,10 @@ async def run_discussion(
     failed_agents: set[str] = set()
     last_post_count = -1
     user_reply_pending = 0
+    meta_reply_pending = 0
     last_user_post_id: int | None = None
+    meta_target_post_id: int | None = None
+    meta_intervention_kind = ""
     try:
         saved_state = await db.load_debate_state(thread_id)
     except Exception:
@@ -304,7 +395,7 @@ async def run_discussion(
                         decompose_topic_axes(thread["topic"]),
                     )
                     debate.set_debate_roles(roles)
-                    debate.set_topic_axes(axes)
+                    debate.set_topic_axes(_sanitize_topic_axes(axes, thread["topic"], thread.get("topic_tags", [])))
                     roles_initialized = True
                     logger.info("roles=%s axes=%s thread=%s", roles, axes, thread_id)
                 except Exception:
@@ -327,7 +418,17 @@ async def run_discussion(
                     and (last_user_post_id is None or p["id"] > last_user_post_id)
                 ):
                     last_user_post_id = p["id"]
-                    user_reply_pending = 3
+                    meta_kind = _classify_user_intervention(p.get("content", ""))
+                    if meta_kind:
+                        meta_reply_pending = 1
+                        meta_target_post_id = p["id"]
+                        meta_intervention_kind = meta_kind
+                        user_reply_pending = 0
+                    else:
+                        user_reply_pending = 3
+                        meta_reply_pending = 0
+                        meta_target_post_id = None
+                        meta_intervention_kind = ""
                     # If user post contains moralizing language, arm the suction guard
                     if _is_moral_suction(p.get("content", "")):
                         moral_suction_active = 5  # next 5 AI posts get resistance directive
@@ -368,6 +469,7 @@ async def run_discussion(
                             constraint_text,
                             int(facilitate.get("constraint_turns", 2)),
                             str(facilitate.get("constraint_kind", "")),
+                            dict(facilitate.get("constraint_schema") or {}),
                         )
                     post = await db.save_post(
                         thread_id,
@@ -391,7 +493,14 @@ async def run_discussion(
             newcomer_hint = False
             # Hard-exclude agents who spoke in the last 3 AI posts (prevents 2-bot loop)
             recent_ai_speakers = {p["agent_id"] for p in posts[-3:] if p.get("agent_id")}
-            if user_reply_pending > 0:
+            if meta_reply_pending > 0:
+                try:
+                    speaker_id = _select_meta_speaker(thread["agent_ids"], posts, agents, failed_agents)
+                except ValueError:
+                    failed_agents.clear()
+                    await asyncio.sleep(0.5)
+                    continue
+            elif user_reply_pending > 0:
                 try:
                     speaker_id = select_next_agent(thread, agents, posts, excluded_agent_ids=failed_agents, debate_state=debate)
                 except ValueError:
@@ -423,7 +532,14 @@ async def run_discussion(
                             continue
 
             # ── Target selection ───────────────────────────────────────────
-            if user_reply_pending > 0:
+            if meta_reply_pending > 0:
+                target = next((p for p in reversed(posts) if p["id"] == meta_target_post_id), None)
+                if target is None:
+                    meta_reply_pending = 0
+                    meta_target_post_id = None
+                    meta_intervention_kind = ""
+                    target = select_target_post(posts, speaker_id, agents, debate_state=debate)
+            elif user_reply_pending > 0:
                 target = next((p for p in reversed(posts) if p["id"] == last_user_post_id), None)
                 if target is None:
                     user_reply_pending = 0
@@ -438,7 +554,9 @@ async def run_discussion(
             stagnating = _detect_stagnation(posts, debate)
             next_directive = debate.peek_directive(speaker_id) or ""
             next_constraint_kind = debate.peek_constraint_kind()
-            if (
+            if meta_reply_pending > 0 and meta_intervention_kind:
+                debate_fn = "synthesize"
+            elif (
                 stagnating
                 and not debate.has_open_attack_against(speaker_id)
                 and not debate.has_pending_definition_response(speaker_id)
@@ -472,12 +590,14 @@ async def run_discussion(
             forced_axis = debate.peek_forced_axis(speaker_id)
             private_directive = debate.peek_directive(speaker_id)
             active_constraint, active_constraint_kind = debate.peek_constraint()
+            active_constraint_schema = debate.peek_constraint_schema()
             agent_recent_axes = debate.get_agent_recent_axes(speaker_id)
             uncovered_axes = debate.get_uncovered_axes()
             pending_definition_terms = debate.get_unresolved_terms()
             target_claim_units = debate.get_claim_units_for_post(target.get("id") if target else None)
+            position_anchor = debate.get_position_anchor(speaker_id)
             retrieval_mode = _determine_retrieval_mode(debate_fn, pending_definition_terms, active_constraint_kind)
-            is_user_post_reply = (user_reply_pending > 0 and target is not None and target.get("user_id") is not None)
+            is_user_post_reply = ((user_reply_pending > 0 or meta_reply_pending > 0) and target is not None and target.get("user_id") is not None)
             target_is_moral = is_user_post_reply and _is_moral_suction(target.get("content", "") if target else "")
             context = {
                 "thread_topic": thread["topic"],
@@ -499,6 +619,7 @@ async def run_discussion(
                 "private_directive": private_directive or "",
                 "active_constraint": active_constraint or "",
                 "active_constraint_kind": active_constraint_kind or "",
+                "active_constraint_schema": active_constraint_schema,
                 "topic_axes": debate.topic_axes,
                 "agent_recent_axes": agent_recent_axes,
                 "uncovered_axes": uncovered_axes,
@@ -509,11 +630,15 @@ async def run_discussion(
                 "moral_suction_warning": target_is_moral or moral_suction_active > 0,
                 "target_claim_summary": summarize_target_claim(target or {}, axis),
                 "target_claim_units": target_claim_units,
+                "target_debate_role": debate.get_debate_role(target_id) if target_id else "",
                 "pending_definition_terms": pending_definition_terms,
                 "recent_argument_fingerprints": debate.recent_argument_fingerprints[-6:],
                 "forbidden_example_keys": debate.recent_example_keys[-4:],
                 "required_response_kind": debate_fn,
                 "retrieval_mode": retrieval_mode,
+                "meta_intervention_kind": meta_intervention_kind if meta_reply_pending > 0 else "",
+                "position_anchor_summary": str(position_anchor.get("summary", "")),
+                "position_anchor_terms": list(position_anchor.get("terms", [])),
             }
 
             try:
@@ -567,7 +692,12 @@ async def run_discussion(
                 debate.pop_directive(speaker_id)
             if active_constraint:
                 debate.consume_constraint()
-            if user_reply_pending > 0:
+            if meta_reply_pending > 0:
+                meta_reply_pending -= 1
+                if meta_reply_pending <= 0:
+                    meta_target_post_id = None
+                    meta_intervention_kind = ""
+            elif user_reply_pending > 0:
                 user_reply_pending -= 1
             if moral_suction_active > 0:
                 moral_suction_active -= 1

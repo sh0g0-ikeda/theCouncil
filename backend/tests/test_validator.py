@@ -20,7 +20,7 @@ def test_validate_generated_reply_rejects_target_mismatch() -> None:
     assert result.retry_hint
 
 
-def test_validate_generated_reply_allows_non_attack_without_overlap() -> None:
+def test_validate_generated_reply_allows_meta_summary_without_target_overlap() -> None:
     result = validate_generated_reply(
         {
             "main_axis": "rationalism",
@@ -30,6 +30,7 @@ def test_validate_generated_reply_allows_non_attack_without_overlap() -> None:
             "target_post": {"id": 3, "content": "Democracy needs legal legitimacy and accountability."},
             "conflict_axis": "rationalism",
             "required_response_kind": "synthesize",
+            "meta_intervention_kind": "summarize",
         },
     )
 
@@ -66,6 +67,42 @@ def test_validate_generated_reply_enforces_tradeoff_constraint() -> None:
             "conflict_axis": "market_trust",
             "required_response_kind": "concretize",
             "active_constraint_kind": "tradeoff",
+        },
+    )
+
+    assert result.ok is False
+
+
+def test_validate_generated_reply_enforces_structured_allowed_axes() -> None:
+    result = validate_generated_reply(
+        {
+            "main_axis": "security",
+            "content": "Costs matter because inflation risk and debt rollover both hit later.",
+            "stance": "disagree",
+        },
+        {
+            "target_post": {"id": 3, "content": "Speed matters most in fiscal policy."},
+            "conflict_axis": "fiscal sustainability",
+            "active_constraint_schema": {"allowed_axes": ["fiscal sustainability"]},
+        },
+    )
+
+    assert result.ok is False
+
+
+def test_validate_generated_reply_rejects_alignment_with_opposite_role() -> None:
+    result = validate_generated_reply(
+        {
+            "main_axis": "fiscal sustainability",
+            "content": "I agree that aggressive stimulus is necessary because growth comes first.",
+            "stance": "agree",
+        },
+        {
+            "target_post": {"id": 3, "content": "Aggressive stimulus is necessary to support demand."},
+            "conflict_axis": "fiscal sustainability",
+            "debate_role": "con",
+            "target_debate_role": "pro",
+            "position_anchor_terms": ["credit", "risk", "debt"],
         },
     )
 
@@ -156,6 +193,26 @@ def test_classify_reply_semantics_extracts_claim_units() -> None:
 
     assert len(analysis.claim_units) >= 1
     assert analysis.claim_units[0]["claim_key"].startswith("rationalism:")
+
+
+def test_classify_reply_semantics_normalizes_axis_to_topic_candidates() -> None:
+    analysis = classify_reply_semantics(
+        {
+            "main_axis": "正戦論的許容性",
+            "content": "Fiscal credibility matters because inflation expectations can spiral.",
+        },
+        {
+            "thread_topic": "日本の責任ある積極財政は正しいか",
+            "current_tags": ["財政持続性", "インフレリスク", "雇用"],
+            "topic_axes": ["財政持続性", "インフレリスク"],
+            "conflict_axis": "財政持続性",
+            "target_post": {"id": 8, "content": "積極財政は需要を支える"},
+            "required_response_kind": "attack",
+        },
+    )
+
+    assert analysis.effective_axis in {"財政持続性", "インフレリスク", "雇用"}
+    assert analysis.effective_axis != "正戦論的許容性"
 
 
 def test_debate_state_tracks_open_claims_and_definition_requests() -> None:

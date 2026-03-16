@@ -111,6 +111,17 @@ async def make_facilitate(
             "constraint": fallbacks[fn_key] if fn_key in {"force_tradeoff", "refocus"} else "",
             "constraint_turns": 2 if fn_key in {"force_tradeoff", "refocus"} else 0,
             "constraint_kind": fn_key if fn_key in {"force_tradeoff", "refocus"} else "",
+            "constraint_schema": (
+                {
+                    "must_include_tradeoff": True,
+                    "must_address_target": True,
+                }
+                if fn_key == "force_tradeoff" else {
+                    "must_address_target": True,
+                    "allowed_axes": [fallback_axis],
+                }
+                if fn_key == "refocus" else {}
+            ),
             "_token_usage": 0,
         }
 
@@ -154,10 +165,15 @@ async def make_facilitate(
     constraint = ""
     constraint_turns = 2
     constraint_kind = ""
+    constraint_schema: dict[str, Any] = {}
     if fn_key in {"force_tradeoff", "refocus"}:
         constraint = str(payload.get("constraint", "")).strip()
         constraint_turns = int(payload.get("constraint_turns", 2))
         constraint_kind = str(payload.get("constraint_kind", fn_key)).strip() or fn_key
+        if fn_key == "force_tradeoff":
+            constraint_schema = {"must_include_tradeoff": True, "must_address_target": True}
+        elif fn_key == "refocus":
+            constraint_schema = {"must_address_target": True, "allowed_axes": [str(payload.get("main_axis", fallback_axis))]}
     return {
         "content": str(payload.get("content", "")).strip(),
         "stance": "facilitate",
@@ -166,6 +182,7 @@ async def make_facilitate(
         "constraint": constraint,
         "constraint_turns": constraint_turns,
         "constraint_kind": constraint_kind,
+        "constraint_schema": constraint_schema,
         "_token_usage": int(getattr(response.usage, "total_tokens", 0) or 0),
     }
 

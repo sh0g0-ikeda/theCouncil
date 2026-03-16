@@ -48,6 +48,7 @@ class DebateState:
         # Facilitator active constraint: declared "next N posts must X"
         self.active_constraint: str = ""
         self.active_constraint_kind: str = ""
+        self.active_constraint_schema: dict[str, Any] = {}
         self.constraint_turns: int = 0
         # Semantic control: open claims / definition requests / novelty memory
         self.claims: dict[str, dict[str, Any]] = {}
@@ -55,6 +56,8 @@ class DebateState:
         self.definition_requests: dict[str, dict[str, Any]] = {}
         self.recent_argument_fingerprints: list[str] = []
         self.recent_example_keys: list[str] = []
+        # Per-agent first committed line in this thread, used to resist silent stance inversion
+        self.position_anchors: dict[str, dict[str, Any]] = {}
         self.last_seen_post_id: int = 0
 
     def record_post(
@@ -234,6 +237,20 @@ class DebateState:
                 if len(self.claim_order) > 40:
                     old_claim_id = self.claim_order.pop(0)
                     self.claims.pop(old_claim_id, None)
+
+        if speaker_id and speaker_id not in self.position_anchors:
+            referenced_terms = [
+                str(term) for term in analysis.get("referenced_terms", [])
+                if str(term).strip()
+            ]
+            self.position_anchors[speaker_id] = {
+                "post_id": post_id,
+                "summary": str(content).strip()[:140],
+                "fingerprint": fingerprint,
+                "terms": referenced_terms[:6],
+                "axis": str(analysis.get("effective_axis", "")),
+                "role": self.debate_roles.get(speaker_id, ""),
+            }
 
         self._sync_open_attacks_from_claims()
 
@@ -531,9 +548,16 @@ class DebateState:
 
     # ── Facilitator active constraint ─────────────────────────────────────────
 
-    def set_facilitator_constraint(self, constraint: str, turns: int = 2, kind: str = "") -> None:
+    def set_facilitator_constraint(
+        self,
+        constraint: str,
+        turns: int = 2,
+        kind: str = "",
+        schema: dict[str, Any] | None = None,
+    ) -> None:
         self.active_constraint = constraint
         self.active_constraint_kind = kind
+        self.active_constraint_schema = dict(schema or {})
         self.constraint_turns = turns
 
     def peek_constraint_kind(self) -> str:
@@ -544,6 +568,11 @@ class DebateState:
             return ("", "")
         return (self.active_constraint, self.active_constraint_kind)
 
+    def peek_constraint_schema(self) -> dict[str, Any]:
+        if not self.active_constraint or self.constraint_turns <= 0:
+            return {}
+        return dict(self.active_constraint_schema)
+
     def consume_constraint(self) -> tuple[str, str]:
         """Return active constraint text/kind and decrement counter. Returns ('','') if none."""
         result, kind = self.peek_constraint()
@@ -553,8 +582,12 @@ class DebateState:
         if self.constraint_turns <= 0:
             self.active_constraint = ""
             self.active_constraint_kind = ""
+            self.active_constraint_schema = {}
             self.constraint_turns = 0
         return (result, kind)
+
+    def get_position_anchor(self, agent_id: str) -> dict[str, Any]:
+        return dict(self.position_anchors.get(agent_id, {}))
 
     def to_dict(self) -> dict:
         return {
@@ -577,12 +610,14 @@ class DebateState:
             "axis_attack_count": self.axis_attack_count,
             "active_constraint": self.active_constraint,
             "active_constraint_kind": self.active_constraint_kind,
+            "active_constraint_schema": self.active_constraint_schema,
             "constraint_turns": self.constraint_turns,
             "claims": self.claims,
             "claim_order": self.claim_order,
             "definition_requests": self.definition_requests,
             "recent_argument_fingerprints": self.recent_argument_fingerprints,
             "recent_example_keys": self.recent_example_keys,
+            "position_anchors": self.position_anchors,
             "last_seen_post_id": self.last_seen_post_id,
         }
 
@@ -633,6 +668,9 @@ class DebateState:
         instance.axis_attack_count = {str(k): int(v) for k, v in data.get("axis_attack_count", {}).items()}
         instance.active_constraint = str(data.get("active_constraint", ""))
         instance.active_constraint_kind = str(data.get("active_constraint_kind", ""))
+        instance.active_constraint_schema = {
+            str(k): v for k, v in data.get("active_constraint_schema", {}).items()
+        }
         instance.constraint_turns = int(data.get("constraint_turns", 0))
         instance.claims = {
             str(k): dict(v) for k, v in data.get("claims", {}).items()
@@ -649,6 +687,10 @@ class DebateState:
         instance.recent_example_keys = [
             str(v) for v in data.get("recent_example_keys", [])
         ]
+        instance.position_anchors = {
+            str(k): dict(v) for k, v in data.get("position_anchors", {}).items()
+            if isinstance(v, dict)
+        }
         instance.last_seen_post_id = int(data.get("last_seen_post_id", 0))
         if instance.claims:
             instance._sync_open_attacks_from_claims()
