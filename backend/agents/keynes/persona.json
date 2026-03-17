@@ -89,5 +89,18 @@
   },
   "categories": [
     "経済学者"
-  ]
+  ],
+  "persona_anchors": {
+    "required_concepts": [
+      "有効需要",
+      "流動性の罠",
+      "財政政策",
+      "不確実性"
+    ],
+    "forbidden_generics": [
+      "経済政策一般",
+      "成長一般",
+      "市場介入一般"
+    ]
+  }
 }

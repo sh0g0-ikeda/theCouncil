@@ -90,5 +90,18 @@
   "categories": [
     "政治家",
     "軍人"
-  ]
+  ],
+  "persona_anchors": {
+    "required_concepts": [
+      "ルビコン",
+      "秩序",
+      "腐敗した手続き民主制",
+      "寛容"
+    ],
+    "forbidden_generics": [
+      "民主主義一般",
+      "法の支配一般",
+      "権力の乱用一般"
+    ]
+  }
 }

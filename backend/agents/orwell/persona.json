@@ -90,5 +90,18 @@
   "categories": [
     "作家",
     "哲学者"
-  ]
+  ],
+  "persona_anchors": {
+    "required_concepts": [
+      "言語腐敗",
+      "プロパガンダ",
+      "ニュースピーク",
+      "自己欺瞞"
+    ],
+    "forbidden_generics": [
+      "表現の自由一般",
+      "権威主義一般",
+      "正義一般"
+    ]
+  }
 }

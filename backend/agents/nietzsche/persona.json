@@ -90,5 +90,19 @@
   "categories": [
     "哲学者",
     "作家"
-  ]
+  ],
+  "persona_anchors": {
+    "required_concepts": [
+      "力への意志",
+      "ニヒリズム",
+      "超人",
+      "奴隷道徳",
+      "永劫回帰"
+    ],
+    "forbidden_generics": [
+      "道徳一般",
+      "権力一般",
+      "価値観一般"
+    ]
+  }
 }

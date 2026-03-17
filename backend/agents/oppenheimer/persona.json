@@ -89,5 +89,18 @@
   },
   "categories": [
     "科学者"
-  ]
+  ],
+  "persona_anchors": {
+    "required_concepts": [
+      "核兵器",
+      "マンハッタン計画",
+      "科学者の責任",
+      "抑止"
+    ],
+    "forbidden_generics": [
+      "技術の倫理一般",
+      "軍事技術一般",
+      "科学一般"
+    ]
+  }
 }

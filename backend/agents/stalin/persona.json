@@ -90,5 +90,18 @@
   "categories": [
     "政治家",
     "軍人"
-  ]
+  ],
+  "persona_anchors": {
+    "required_concepts": [
+      "一国社会主義",
+      "粛清",
+      "計画経済",
+      "強制的近代化"
+    ],
+    "forbidden_generics": [
+      "権威主義一般",
+      "独裁一般",
+      "社会主義一般"
+    ]
+  }
 }

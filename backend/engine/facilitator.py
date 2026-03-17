@@ -248,6 +248,10 @@ def _select_facilitator_function(posts: list[dict[str, Any]], debate: Any = None
         and any(v in {"contested", "rebutted"} for v in debate.axis_depth.values())
     )
 
+    # Camp reassert: if debate.alerts contains "camp_reassert", high priority
+    if debate is not None and "camp_reassert" in getattr(debate, "alerts", set()):
+        return "camp_reassert"
+
     # Very early (≤3 posts): force definitional intervention to anchor key terms
     if len(posts) <= 3:
         return "differentiate"

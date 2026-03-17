@@ -91,5 +91,18 @@
   "categories": [
     "軍人",
     "哲学者"
-  ]
+  ],
+  "persona_anchors": {
+    "required_concepts": [
+      "彼を知り己を知れ",
+      "兵は詭道",
+      "虚実",
+      "形勢"
+    ],
+    "forbidden_generics": [
+      "戦略一般",
+      "勝利一般",
+      "リーダーシップ一般"
+    ]
+  }
 }

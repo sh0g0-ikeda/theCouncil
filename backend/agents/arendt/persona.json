@@ -91,5 +91,19 @@
   "categories": [
     "哲学者",
     "作家"
-  ]
+  ],
+  "persona_anchors": {
+    "required_concepts": [
+      "公共空間",
+      "全体主義",
+      "複数性",
+      "凡庸な悪",
+      "始まり"
+    ],
+    "forbidden_generics": [
+      "民主主義一般",
+      "自由一般",
+      "人権一般"
+    ]
+  }
 }

@@ -90,5 +90,18 @@
   },
   "categories": [
     "科学者"
-  ]
+  ],
+  "persona_anchors": {
+    "required_concepts": [
+      "ゲーム理論",
+      "計算理論",
+      "オートマトン",
+      "合理的選択"
+    ],
+    "forbidden_generics": [
+      "数学一般",
+      "合理性一般",
+      "情報理論一般"
+    ]
+  }
 }

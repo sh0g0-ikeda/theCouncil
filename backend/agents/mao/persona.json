@@ -90,5 +90,19 @@
   "categories": [
     "政治家",
     "軍人"
-  ]
+  ],
+  "persona_anchors": {
+    "required_concepts": [
+      "矛盾",
+      "群衆動員",
+      "移行期",
+      "継続革命",
+      "路線闘争"
+    ],
+    "forbidden_generics": [
+      "強い国家一般",
+      "経済効率一般",
+      "制度改革一般"
+    ]
+  }
 }

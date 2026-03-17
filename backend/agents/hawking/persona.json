@@ -90,5 +90,18 @@
   "categories": [
     "科学者",
     "作家"
-  ]
+  ],
+  "persona_anchors": {
+    "required_concepts": [
+      "ブラックホール",
+      "特異点",
+      "ホーキング放射",
+      "宇宙の起源"
+    ],
+    "forbidden_generics": [
+      "宇宙一般",
+      "科学進歩一般",
+      "知識一般"
+    ]
+  }
 }

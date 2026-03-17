@@ -87,9 +87,11 @@ class SemanticPostAnalysis:
     definition_requests: list[str]
     definition_terms: list[str]
     argument_fingerprint: str
+    proposition_fingerprint: str
     example_keys: list[str]
     referenced_terms: list[str]
     claim_units: list[dict[str, Any]]
+    claim_structure: dict[str, Any]
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -107,9 +109,11 @@ class SemanticPostAnalysis:
             "definition_requests": self.definition_requests,
             "definition_terms": self.definition_terms,
             "argument_fingerprint": self.argument_fingerprint,
+            "proposition_fingerprint": self.proposition_fingerprint,
             "example_keys": self.example_keys,
             "referenced_terms": self.referenced_terms,
             "claim_units": self.claim_units,
+            "claim_structure": self.claim_structure,
         }
 
     @classmethod
@@ -129,9 +133,11 @@ class SemanticPostAnalysis:
             definition_requests=[str(v) for v in payload.get("definition_requests", [])],
             definition_terms=[str(v) for v in payload.get("definition_terms", [])],
             argument_fingerprint=str(payload.get("argument_fingerprint", "")),
+            proposition_fingerprint=str(payload.get("proposition_fingerprint", "")),
             example_keys=[str(v) for v in payload.get("example_keys", [])],
             referenced_terms=[str(v) for v in payload.get("referenced_terms", [])],
             claim_units=[dict(v) for v in payload.get("claim_units", []) if isinstance(v, dict)],
+            claim_structure=dict(payload.get("claim_structure") or {}),
         )
 
 
@@ -263,6 +269,65 @@ def _extract_claim_units(text: str, main_axis: str, *, limit: int = 2) -> list[d
         if len(units) >= limit:
             break
     return units
+
+
+_PREMISE_MARKERS = ("なぜなら", "だから", "なので", "理由は")
+_MECHANISM_MARKERS = ("ことで", "によって", "通じて")
+_SENTENCE_END = re.compile(r"[。.!?！？\n]")
+
+
+def _extract_claim_structure(content: str) -> dict[str, Any]:
+    """Heuristic extraction of {premises, conclusion, mechanism} from content."""
+    sentences = [s.strip() for s in _SENTENCE_END.split(content or "") if s.strip()]
+    conclusion = ""
+    for sent in reversed(sentences):
+        if sent.endswith(("。", "だ", "である")) or len(sent) > 0:
+            if len(sent) <= 60:
+                conclusion = sent
+                break
+    if not conclusion and sentences:
+        conclusion = sentences[-1][:60]
+
+    premises: list[str] = []
+    for sent in sentences[:-1] if sentences else []:
+        if any(marker in sent for marker in _PREMISE_MARKERS):
+            premises.append(sent[:80])
+        if len(premises) >= 2:
+            break
+
+    mechanism = ""
+    for sent in sentences:
+        if any(marker in sent for marker in _MECHANISM_MARKERS):
+            mechanism = sent[:60]
+            break
+
+    return {"premises": premises, "conclusion": conclusion, "mechanism": mechanism or None}
+
+
+def _make_proposition_fingerprint(content: str) -> str:
+    """Create a short fingerprint of the proposition from the content."""
+    kws = _keywords(content, limit=8)
+    return "|".join(sorted(kws[:6])) if kws else ""
+
+
+def _char_overlap_ratio(a: str, b: str) -> float:
+    """Simple character-level overlap ratio between two strings."""
+    if not a or not b:
+        return 0.0
+    set_a = set(a)
+    set_b = set(b)
+    return len(set_a & set_b) / max(len(set_a), len(set_b))
+
+
+def _check_persona_anchor(content: str, persona: dict[str, Any]) -> bool:
+    """Return True if content satisfies persona_anchors required_concepts (if present)."""
+    anchors = persona.get("persona_anchors")
+    if not anchors:
+        return True
+    required = anchors.get("required_concepts", [])
+    if not required:
+        return True
+    return any(concept in content for concept in required)
 
 
 def summarize_target_claim(target_post: dict[str, Any], conflict_axis: str) -> str:
@@ -452,6 +517,8 @@ def classify_reply_semantics(reply: dict[str, Any], context: dict[str, Any]) -> 
             referenced_terms.insert(0, term)
     referenced_terms = referenced_terms[:8]
     argument_fingerprint = _make_argument_fingerprint(effective_axis, referenced_terms, reply_content)
+    proposition_fingerprint = _make_proposition_fingerprint(reply_content)
+    claim_structure = _extract_claim_structure(reply_content)
     example_keys = _extract_example_keys(reply_content)
     claim_units = _extract_claim_units(
         reply_content,
@@ -477,9 +544,11 @@ def classify_reply_semantics(reply: dict[str, Any], context: dict[str, Any]) -> 
         definition_requests=definition_requests,
         definition_terms=definition_terms,
         argument_fingerprint=argument_fingerprint,
+        proposition_fingerprint=proposition_fingerprint,
         example_keys=example_keys,
         referenced_terms=referenced_terms[:6],
         claim_units=claim_units,
+        claim_structure=claim_structure,
     )
 
 
@@ -568,6 +637,32 @@ def validate_generated_reply(reply: dict[str, Any], context: dict[str, Any]) -> 
 
     if constraint_kind == "refocus" and target_post.get("content") and analysis.target_overlap <= 0.0 and not analysis.definition_terms:
         return ValidationResult(False, "Refocus on the target claim instead of drifting away.", analysis)
+
+    # Persona anchor check: for attack/steelman/supplement, at least one required_concept must appear
+    persona = context.get("persona") or {}
+    if analysis.effective_function in {"attack", "steelman", "supplement"} and persona:
+        if not _check_persona_anchor(str(reply.get("content", "")), persona):
+            req = persona.get("persona_anchors", {}).get("required_concepts", [])
+            return ValidationResult(False, f"Use at least one of your required concepts: {', '.join(req[:3])}.", analysis)
+
+    # Phase 1 definition check: non-define functions blocked when abstract_terms need definition
+    debate_post_count = int(context.get("debate_post_count", 999))
+    abstract_terms = [str(t) for t in context.get("abstract_terms", []) if str(t).strip()]
+    pending_abstract = [t for t in abstract_terms if t not in {str(v) for v in context.get("resolved_abstract_terms", [])}]
+    if (
+        debate_post_count <= 4
+        and analysis.effective_function not in {"define", "differentiate", "facilitate"}
+        and pending_abstract
+    ):
+        return ValidationResult(False, f"phase1_definition_required: define {' / '.join(pending_abstract[:2])} first.", analysis)
+
+    # Conclusion repetition check: if current conclusion >= 80% similar to last 3 conclusions from same agent
+    current_conclusion = str(analysis.claim_structure.get("conclusion", "")).strip()
+    recent_conclusions = [str(c) for c in context.get("recent_agent_conclusions", []) if str(c).strip()]
+    if current_conclusion and recent_conclusions:
+        for prev_conclusion in recent_conclusions[-3:]:
+            if _char_overlap_ratio(current_conclusion, prev_conclusion) >= 0.8:
+                return ValidationResult(False, "Use a genuinely different argument structure.", analysis)
 
     debate_role = str(context.get("debate_role", "")).strip()
     target_role = str(context.get("target_debate_role", "")).strip()

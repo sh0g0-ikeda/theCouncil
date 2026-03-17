@@ -89,5 +89,18 @@
   },
   "categories": [
     "経済学者"
-  ]
+  ],
+  "persona_anchors": {
+    "required_concepts": [
+      "マネタリズム",
+      "自由市場",
+      "政府の失敗",
+      "負の所得税"
+    ],
+    "forbidden_generics": [
+      "経済的自由一般",
+      "小さな政府一般",
+      "規制緩和一般"
+    ]
+  }
 }

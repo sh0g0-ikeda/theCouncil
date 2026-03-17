@@ -23,6 +23,33 @@ def _eligible_participants(participant_ids: list[str], excluded_agent_ids: set[s
     return [agent_id for agent_id in participant_ids if agent_id not in excluded_agent_ids]
 
 
+def participation_floor_penalty(
+    agent_id: str,
+    recent_ai_posts: list[dict],
+    window: int = 8,
+    max_share: float = 0.4,
+) -> float:
+    """Return score adjustment based on recent participation share.
+
+    - If agent has > max_share of the last window AI posts: -3.0
+    - If agent has zero appearances in the last window posts: +2.0 (floor boost)
+    - Otherwise: 0.0
+    """
+    if not recent_ai_posts:
+        return 0.0
+    window_posts = recent_ai_posts[-window:]
+    total = len(window_posts)
+    if total == 0:
+        return 0.0
+    count = sum(1 for p in window_posts if p.get("agent_id") == agent_id)
+    share = count / total
+    if share > max_share:
+        return -3.0
+    if count == 0:
+        return 2.0
+    return 0.0
+
+
 def select_silent_agent(
     thread: dict[str, Any],
     agents: dict[str, Any],
@@ -76,11 +103,30 @@ def select_next_agent(
     last_side = debate_state.get_agent_side(last_agent_id) if debate_state is not None else ""
     last_camp_function = debate_state.get_camp_function(last_agent_id) if debate_state is not None else ""
 
+    # Participation floor: recent AI posts for floor/ceiling calculations
+    recent_ai_posts = [p for p in posts if p.get("agent_id")][-8:]
+    # Hard guard: agents in last 5 AI posts >= 2 times are skipped if others have 0
+    last5_ai = [p for p in posts if p.get("agent_id")][-5:]
+    agents_zero_in_last5 = {
+        aid for aid in participant_ids
+        if aid not in excluded_agent_ids
+        and aid != last_agent_id
+        and sum(1 for p in last5_ai if p.get("agent_id") == aid) == 0
+        and aid in agents
+    }
+
     scores: dict[str, float] = {}
     for agent_id in participant_ids:
         if agent_id == last_agent_id or agent_id in excluded_agent_ids:
             continue
         agent = agents[agent_id]
+
+        # Hard guard: if this agent appeared >= 2 of last 5 AI posts and others have 0, skip
+        agent_last5_count = sum(1 for p in last5_ai if p.get("agent_id") == agent_id)
+        if agent_last5_count >= 2 and agents_zero_in_last5:
+            scores[agent_id] = -99.0
+            continue
+
         opposition = (agent.vector.manhattan_distance(last_vector) / 70.0) if last_vector else 0.5
         silence_bonus = max(0.0, (avg_count - post_counts[agent_id]) / avg_count) if avg_count > 0 else 0.0
         persona_text = " ".join(
@@ -115,6 +161,8 @@ def select_next_agent(
             and debate_state.get_camp_function(agent_id) == last_camp_function
         ):
             camp_function_penalty = 0.18
+        # Participation floor penalty/boost
+        floor_adj = participation_floor_penalty(agent_id, recent_ai_posts)
         score = (
             ALPHA * opposition
             + BETA * silence_bonus
@@ -123,16 +171,22 @@ def select_next_agent(
             + arsenal_boost
             + side_diversity
             - camp_function_penalty
+            + floor_adj
         )
         # Floor weight: everyone gets at least 0.15 to prevent complete lock-out
+        # (but not if hard-guarded with -99)
         scores[agent_id] = max(score, 0.15)
 
     if not scores:
         raise ValueError("No eligible agents available")
 
     # Weighted random sampling: preserves signal but prevents deterministic lock-in
-    candidates = list(scores.keys())
-    weights = [scores[a] for a in candidates]
+    # Filter out hard-guarded agents (score == -99)
+    eligible = [(a, s) for a, s in scores.items() if s > -50.0]
+    if not eligible:
+        eligible = list(scores.items())  # fallback: use all
+    candidates = [a for a, _ in eligible]
+    weights = [s for _, s in eligible]
     return random.choices(candidates, weights=weights)[0]
 
 

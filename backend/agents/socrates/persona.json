@@ -90,5 +90,19 @@
   },
   "categories": [
     "哲学者"
-  ]
+  ],
+  "persona_anchors": {
+    "required_concepts": [
+      "問答法",
+      "無知の知",
+      "イデア",
+      "エレンコス",
+      "魂の世話"
+    ],
+    "forbidden_generics": [
+      "対話一般",
+      "哲学一般",
+      "批判的思考一般"
+    ]
+  }
 }

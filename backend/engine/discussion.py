@@ -22,6 +22,13 @@ logger = logging.getLogger(__name__)
 agents: dict[str, Agent] = {}
 _discussion_tasks: dict[str, asyncio.Task[None]] = {}
 _TOKEN_PATTERN = re.compile(r"[\w\u3040-\u30ff\u3400-\u9fff]+", re.UNICODE)
+
+# Particles and common short verbs to exclude from noun extraction
+_JP_PARTICLES = {
+    "は", "が", "を", "に", "で", "と", "も", "の", "へ", "や", "な", "か",
+    "て", "し", "れ", "せ", "ず", "ない", "する", "ある", "いる", "なる",
+    "これ", "それ", "あれ", "ここ", "そこ", "もの", "こと", "ため", "よう",
+}
 _META_SUMMARY_PATTERNS = (
     re.compile(r"(?:結局|要するに).*(?:論点|争点)"),
     re.compile(r"(?:論点|争点).*(?:何|どこ)"),
@@ -31,6 +38,41 @@ _META_SUMMARY_PATTERNS = (
 
 # Keywords that indicate a moralistic/discussion-stopping post
 _MORAL_KEYWORDS = {"差別", "倫理", "道徳", "人権", "正義", "に決まって", "絶対悪", "許されない", "当然", "べきでない"}
+
+
+def _extract_abstract_nouns(topic: str, max_nouns: int = 5) -> list[str]:
+    """Extract 2+ char noun-like tokens from topic, excluding common particles/verbs."""
+    tokens = _TOKEN_PATTERN.findall(topic or "")
+    seen: list[str] = []
+    for token in tokens:
+        if len(token) < 2:
+            continue
+        if token in _JP_PARTICLES:
+            continue
+        if token not in seen:
+            seen.append(token)
+        if len(seen) >= max_nouns:
+            break
+    return seen
+
+
+def seed_subquestions(topic: str) -> list[str]:
+    """Pure function (no LLM): extract subquestions from the topic using keyword heuristics.
+
+    Generates 4 families of subquestions:
+    - 定義系
+    - 実現条件系
+    - 失敗条件系
+    - 移行メカニズム系
+    """
+    nouns = _extract_abstract_nouns(topic, max_nouns=2)
+    subquestions: list[str] = []
+    for noun in nouns:
+        subquestions.append(f"「{noun}」とは何か、どのように定義されるか")
+        subquestions.append(f"「{noun}」はいかなる条件で実現するか、それを妨げる要因は何か")
+        subquestions.append(f"「{noun}」が失敗するとしたらなぜか、その弱点は何か")
+        subquestions.append(f"現状から「{noun}」への移行はどう起きるか、その過程で何が変わるか")
+    return subquestions[:8]
 
 
 def _is_moral_suction(content: str) -> bool:
@@ -212,10 +254,19 @@ def _run_director(
         if open_attack:
             attacker_id, snippet = open_attack
             attacker_name = agents_dict[attacker_id].display_name if attacker_id in agents_dict else attacker_id
+            # Include claim conclusion if available
+            conclusion_hint = ""
+            if hasattr(debate, "open_claim_structures"):
+                for cs_entry in reversed(debate.open_claim_structures[-10:]):
+                    if cs_entry.get("agent_id") == attacker_id:
+                        conclusion = cs_entry.get("structure", {}).get("conclusion", "")
+                        if conclusion:
+                            conclusion_hint = f"結論「{conclusion[:40]}」を崩せ。"
+                        break
             debate.push_directive(
                 agent_id,
                 f"MISSION:rebut_core_claim｜{attacker_name}の「{snippet[:50]}」が未反論のまま残っている。"
-                f"前提・定義・証拠の弱点を一点だけ選んで直接崩せ。迂回や言い換えは失格。",
+                f"{conclusion_hint}前提・定義・証拠の弱点を一点だけ選んで直接崩せ。迂回や言い換えは失格。",
             )
             continue
 
@@ -319,10 +370,13 @@ def _needs_director(posts: list[dict[str, Any]], debate: "DebateState") -> bool:
     return False
 
 
-def _should_facilitate(posts: list[dict[str, Any]]) -> bool:
+def _should_facilitate(posts: list[dict[str, Any]], debate: "DebateState | None" = None) -> bool:
     """Event-driven facilitator: fires only when structural problems are detected."""
     if not posts or posts[-1].get("is_facilitator", False):
         return False
+    # Camp reassert alert: trigger facilitation immediately
+    if debate is not None and "camp_reassert" in getattr(debate, "alerts", set()):
+        return True
     # Minimum gap: 5 posts since last facilitation
     structural_posts = [p for p in posts if p.get("agent_id") or p.get("is_facilitator")]
     for p in structural_posts[-5:]:
@@ -425,6 +479,26 @@ async def run_discussion(
                 failed_agents.clear()
                 last_post_count = len(posts)
 
+            # ── Seed subquestions at thread start (once, no existing posts) ──
+            ai_posts_count = sum(1 for p in posts if p.get("agent_id"))
+            if not debate.thread_subquestions and ai_posts_count == 0:
+                debate.thread_subquestions = seed_subquestions(thread["topic"])
+            # ── Extract abstract terms for Phase 1 definitions ───────────────
+            if not debate.abstract_terms and ai_posts_count == 0:
+                debate.abstract_terms = _extract_abstract_nouns(thread["topic"], max_nouns=5)
+                # Register abstract terms as definition obligations if not already present
+                for term in debate.abstract_terms:
+                    if term not in debate.definition_requests:
+                        debate.definition_requests[term] = {
+                            "status": "open",
+                            "requested_post_id": 0,
+                            "requested_by": "system",
+                            "target_agent_id": None,
+                            "created_post_id": 0,
+                            "answered_post_id": None,
+                            "answered_by": None,
+                        }
+
             # Detect new user posts and queue 3 agent replies
             for p in posts:
                 if (
@@ -467,7 +541,7 @@ async def run_discussion(
             if _needs_director(posts, debate):
                 _run_director(thread, debate, agents, posts)
 
-            if _should_facilitate(posts):
+            if _should_facilitate(posts, debate):
                 agent_display_names = {
                     aid: agents[aid].display_name
                     for aid in thread["agent_ids"] if aid in agents
@@ -690,6 +764,19 @@ async def run_discussion(
                 "position_anchor_summary": str(position_anchor.get("summary", "")),
                 "position_anchor_terms": list(position_anchor.get("terms", [])),
                 "position_anchor_side": str(position_anchor.get("side", "")),
+                "thread_subquestions": debate.thread_subquestions,
+                "debate_post_count": len(posts),
+                "abstract_terms": debate.abstract_terms,
+                "resolved_abstract_terms": [
+                    t for t, v in debate.definition_requests.items()
+                    if v.get("status") == "answered"
+                ],
+                "recent_agent_conclusions": [
+                    cs["structure"]["conclusion"]
+                    for cs in debate.open_claim_structures[-10:]
+                    if cs.get("agent_id") == speaker_id and cs.get("structure", {}).get("conclusion")
+                ],
+                "persona": agents[speaker_id].persona,
             }
 
             try:
@@ -737,6 +824,22 @@ async def run_discussion(
                 analysis=semantic_analysis.as_dict(),
                 content=reply["content"],
             )
+            # Record proposition fingerprint for camp reassertion detection
+            prop_fp = semantic_analysis.proposition_fingerprint
+            if prop_fp:
+                debate.record_proposition(speaker_id, prop_fp)
+                if debate.check_camp_reassert(speaker_id, prop_fp):
+                    debate.alerts.add("camp_reassert")
+            # Track open claim structures for director
+            claim_structure = semantic_analysis.claim_structure
+            if claim_structure and claim_structure.get("conclusion"):
+                debate.open_claim_structures.append({
+                    "agent_id": speaker_id,
+                    "post_id": post["id"],
+                    "structure": claim_structure,
+                })
+                if len(debate.open_claim_structures) > 20:
+                    debate.open_claim_structures.pop(0)
             if forced_axis:
                 debate.pop_forced_axis(speaker_id)
             if private_directive:

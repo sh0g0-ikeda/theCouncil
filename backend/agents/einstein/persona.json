@@ -89,5 +89,19 @@
   },
   "categories": [
     "科学者"
-  ]
+  ],
+  "persona_anchors": {
+    "required_concepts": [
+      "相対性",
+      "光速不変",
+      "E=mc2",
+      "時空",
+      "平和主義"
+    ],
+    "forbidden_generics": [
+      "科学一般",
+      "物理学一般",
+      "合理性一般"
+    ]
+  }
 }

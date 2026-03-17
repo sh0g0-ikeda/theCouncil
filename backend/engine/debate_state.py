@@ -70,6 +70,16 @@ class DebateState:
         # Per-agent first committed line in this thread, used to resist silent stance inversion
         self.position_anchors: dict[str, dict[str, Any]] = {}
         self.last_seen_post_id: int = 0
+        # Subquestions seeded at thread start (list of strings)
+        self.thread_subquestions: list[str] = []
+        # Camp reassertion tracking: agent_id -> list of proposition fingerprints used
+        self.camp_proposition_map: dict[str, list[str]] = {}
+        # Active alerts (e.g. "camp_reassert")
+        self.alerts: set[str] = set()
+        # Abstract terms extracted from topic for Phase 1 definitions
+        self.abstract_terms: list[str] = []
+        # Open claim structures: list of {agent_id, post_id, structure}
+        self.open_claim_structures: list[dict[str, Any]] = []
 
     def record_post(
         self,
@@ -814,6 +824,17 @@ class DebateState:
     def get_position_anchor(self, agent_id: str) -> dict[str, Any]:
         return dict(self.position_anchors.get(agent_id, {}))
 
+    def record_proposition(self, agent_id: str, prop_fp: str) -> int:
+        """Record a proposition fingerprint for an agent; return the count of this fp."""
+        lst = self.camp_proposition_map.setdefault(agent_id, [])
+        lst.append(prop_fp)
+        return lst.count(prop_fp)
+
+    def check_camp_reassert(self, agent_id: str, prop_fp: str, threshold: int = 3) -> bool:
+        """Return True if this agent has used this prop_fp >= threshold times."""
+        lst = self.camp_proposition_map.get(agent_id, [])
+        return lst.count(prop_fp) >= threshold
+
     def to_dict(self) -> dict:
         return {
             "anger": [[k[0], k[1], v] for k, v in self.anger.items()],
@@ -852,6 +873,11 @@ class DebateState:
             "recent_example_keys": self.recent_example_keys,
             "position_anchors": self.position_anchors,
             "last_seen_post_id": self.last_seen_post_id,
+            "thread_subquestions": self.thread_subquestions,
+            "camp_proposition_map": self.camp_proposition_map,
+            "alerts": list(self.alerts),
+            "abstract_terms": self.abstract_terms,
+            "open_claim_structures": self.open_claim_structures,
         }
 
     @classmethod
@@ -951,6 +977,17 @@ class DebateState:
             if isinstance(v, dict)
         }
         instance.last_seen_post_id = int(data.get("last_seen_post_id", 0))
+        instance.thread_subquestions = [str(v) for v in data.get("thread_subquestions", [])]
+        instance.camp_proposition_map = {
+            str(k): [str(v) for v in lst]
+            for k, lst in data.get("camp_proposition_map", {}).items()
+            if isinstance(lst, list)
+        }
+        instance.alerts = set(str(v) for v in data.get("alerts", []))
+        instance.abstract_terms = [str(v) for v in data.get("abstract_terms", [])]
+        instance.open_claim_structures = [
+            dict(v) for v in data.get("open_claim_structures", []) if isinstance(v, dict)
+        ]
         if instance.claims:
             instance._sync_open_attacks_from_claims()
         return instance

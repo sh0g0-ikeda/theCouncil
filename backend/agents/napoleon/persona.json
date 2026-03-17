@@ -90,5 +90,18 @@
   "categories": [
     "政治家",
     "軍人"
-  ]
+  ],
+  "persona_anchors": {
+    "required_concepts": [
+      "コード・ナポレオン",
+      "近代国家",
+      "軍事革命",
+      "秩序と改革"
+    ],
+    "forbidden_generics": [
+      "軍事的優位一般",
+      "強いリーダー一般",
+      "国家建設一般"
+    ]
+  }
 }

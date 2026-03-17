@@ -227,6 +227,19 @@ def build_prompt(
 
     phase_directive = _PHASE_DIRECTIVES.get(phase, "")
 
+    # Subquestions skeleton injection
+    thread_subquestions = context.get("thread_subquestions", [])
+    subquestions_block = ""
+    if thread_subquestions:
+        sq_lines = "\n".join(f"- {sq}" for sq in thread_subquestions[:8])
+        subquestions_block = f"\n【争点の骨格】\n{sq_lines}"
+
+    # Persona required_concepts injection
+    required_concepts = []
+    if persona:
+        anchors = persona.get("persona_anchors", {})
+        required_concepts = anchors.get("required_concepts", []) if isinstance(anchors, dict) else []
+
     # Evaluation axes for this topic
     topic_axes = context.get("topic_axes", [])
     agent_recent_axes = context.get("agent_recent_axes", [])
@@ -251,8 +264,8 @@ def build_prompt(
         )
 
     context_text = f"""{fn_line}{phase_directive}
-テーマ(厳守): {topic_text}
-論点タグ: {', '.join(context.get('current_tags', []))}{axes_line}
+テーマ(厳守): {topic_text}{subquestions_block}{axes_line}
+論点タグ: {', '.join(context.get('current_tags', []))}
 返信先#{target.get('id', '?')}({target.get('display_name') or target.get('agent_id') or '名無し'}): {target_text}{rebut_procedure}
 衝突軸: {context.get('conflict_axis', '')}／役割: {context.get('role', 'counter')}
 要約: {summary_text}
@@ -332,6 +345,8 @@ def build_prompt(
         "proposition_stance, camp_function, main_axis, subquestion_id, shift_reason, "
         "content, used_arsenal_id."
     )
+    if required_concepts:
+        context_text += f"\n【このキャラ固有の必須概念（少なくとも1つ使え）】: {', '.join(required_concepts[:5])}"
     pending_definition_terms = context.get("pending_definition_terms", [])[:3]
     if pending_definition_terms:
         context_text += f"\n📚 未解決の定義語: {' / '.join(pending_definition_terms)}"

@@ -90,5 +90,18 @@
   "categories": [
     "経済学者",
     "哲学者"
-  ]
+  ],
+  "persona_anchors": {
+    "required_concepts": [
+      "見えざる手",
+      "分業",
+      "道徳感情論",
+      "自由市場"
+    ],
+    "forbidden_generics": [
+      "市場一般",
+      "効率性一般",
+      "自由主義一般"
+    ]
+  }
 }

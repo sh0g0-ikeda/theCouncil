@@ -90,5 +90,19 @@
   "categories": [
     "哲学者",
     "経済学者"
-  ]
+  ],
+  "persona_anchors": {
+    "required_concepts": [
+      "階級闘争",
+      "生産関係",
+      "疎外",
+      "上部構造",
+      "剰余価値"
+    ],
+    "forbidden_generics": [
+      "格差一般",
+      "貧困一般",
+      "資本主義批判一般"
+    ]
+  }
 }
