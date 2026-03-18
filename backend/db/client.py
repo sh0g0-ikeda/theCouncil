@@ -123,6 +123,18 @@ class DatabaseClient:
                     "UPDATE users SET monthly_thread_count = monthly_thread_count + 1 WHERE id = $1",
                     user_id,
                 )
+                # Enforce global thread cap: delete oldest threads beyond 200
+                await conn.execute(
+                    """
+                    DELETE FROM threads
+                    WHERE id IN (
+                        SELECT id FROM threads
+                        WHERE deleted_at IS NULL
+                        ORDER BY created_at DESC
+                        OFFSET 200
+                    )
+                    """
+                )
         return _row_to_dict(row) or {}
 
     async def list_threads(self, sort: str, limit: int) -> list[dict[str, Any]]:
