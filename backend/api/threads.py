@@ -87,7 +87,7 @@ async def get_quota(
     db: DatabaseClient = Depends(get_db),
 ) -> dict[str, Any]:
     internal_id = await db.ensure_user_from_request(user.id, user.email)
-    account = await db.fetch_user(internal_id)
+    account = await db.fetch_user_normalized(internal_id)
     if not account:
         raise HTTPException(status_code=401, detail="User record was not provisioned")
     plan = account.get("plan", "free")

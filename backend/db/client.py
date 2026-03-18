@@ -48,6 +48,12 @@ class DatabaseClient:
             row = await conn.fetchrow("SELECT * FROM users WHERE id = $1", user_id)
         return _row_to_dict(row)
 
+    async def fetch_user_normalized(self, user_id: str) -> dict[str, Any] | None:
+        """fetch_user with monthly quota reset applied."""
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            return await self._normalize_thread_quota(conn, user_id)
+
     async def ensure_user_from_request(self, x_id: str, email: str | None) -> str:
         """Upsert user by x_id (Twitter ID), return internal UUID."""
         pool = await self._ensure_pool()
