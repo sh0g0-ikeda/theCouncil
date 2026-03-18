@@ -122,7 +122,7 @@ def _get_client() -> Any:
     if AsyncOpenAI is None:
         raise RuntimeError("openai package is required")
     if _client is None:
-        _client = AsyncOpenAI()
+        _client = AsyncOpenAI(timeout=60.0)
     return _client
 
 

@@ -433,6 +433,7 @@ async def run_discussion(
 
     try:
         while True:
+          try:
             thread = await db.fetch_thread(thread_id)
             if not thread or thread.get("deleted_at"):
                 break
@@ -575,6 +576,7 @@ async def run_discussion(
                         token_usage=int(facilitate.get("_token_usage", 0)),
                     )
                     failed_agents.clear()
+                    debate.alerts.discard("camp_reassert")
                     await push_fn(thread_id, post)
                     continue
 
@@ -858,6 +860,11 @@ async def run_discussion(
                     await db.save_debate_state(thread_id, debate.to_dict())
                 except Exception:
                     logger.warning("save_debate_state failed (table may not exist yet)", exc_info=True)
+          except asyncio.CancelledError:
+              raise
+          except Exception:
+              logger.exception("debate loop iteration failed for thread=%s, retrying in 5s", thread_id)
+              await asyncio.sleep(5)
     finally:
         _discussion_tasks.pop(thread_id, None)
 
