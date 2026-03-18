@@ -7,7 +7,7 @@ from api.deps import RequestUser, require_user
 from db.client import DatabaseClient, get_db
 from engine.discussion import agents, start_discussion
 from engine.llm import generate_topic_tags, moderate_text
-from policies import clamp_max_posts
+from policies import clamp_max_posts, max_agents, monthly_thread_limit
 from rate_limit import limiter
 from realtime import connection_manager
 
@@ -18,7 +18,7 @@ class CreateThreadRequest(BaseModel):
     topic: str = Field(min_length=3, max_length=500)
     agent_ids: list[str]
     visibility: str = "public"
-    max_posts: int = Field(default=20, ge=10, le=20)
+    max_posts: int = Field(default=20, ge=10, le=40)
 
 
 class SpeedRequest(BaseModel):
@@ -34,8 +34,8 @@ async def create_thread(
     db: DatabaseClient = Depends(get_db),
 ) -> dict[str, Any]:
     agent_ids = list(dict.fromkeys(req.agent_ids))
-    if not (2 <= len(agent_ids) <= 5):
-        raise HTTPException(status_code=400, detail="参加人格は3〜8体です")
+    if not (2 <= len(agent_ids)):
+        raise HTTPException(status_code=400, detail="参加人格は2体以上です")
     if req.visibility not in {"public", "private"}:
         raise HTTPException(status_code=400, detail="Invalid visibility")
 
@@ -50,7 +50,10 @@ async def create_thread(
     account = await db.fetch_user(internal_id)
     if not account:
         raise HTTPException(status_code=401, detail="User record was not provisioned")
-    max_posts = clamp_max_posts(account.get("plan", "free"), req.max_posts)
+    plan = account.get("plan", "free")
+    if len(agent_ids) > max_agents(plan):
+        raise HTTPException(status_code=400, detail=f"このプランで選択できる人格は最大{max_agents(plan)}体です")
+    max_posts = clamp_max_posts(plan, req.max_posts)
     try:
         topic_tags = await generate_topic_tags(req.topic)
         thread = await db.create_thread(
@@ -63,7 +66,8 @@ async def create_thread(
         )
     except ValueError as exc:
         if str(exc) == "free_plan_limit":
-            raise HTTPException(status_code=403, detail="無料プランは月5スレッドまでです") from exc
+            limit = monthly_thread_limit(plan)
+            raise HTTPException(status_code=403, detail=f"月間スレッド作成数の上限（{limit}本）に達しました") from exc
         if str(exc) == "user_banned":
             raise HTTPException(status_code=403, detail="BANされたユーザーです") from exc
         raise
@@ -73,6 +77,28 @@ async def create_thread(
 
     await start_discussion(thread["id"], push)
     return thread
+
+
+@router.get("/quota")
+@limiter.limit("60/minute")
+async def get_quota(
+    request: Request,
+    user: RequestUser = Depends(require_user),
+    db: DatabaseClient = Depends(get_db),
+) -> dict[str, Any]:
+    internal_id = await db.ensure_user_from_request(user.id, user.email)
+    account = await db.fetch_user(internal_id)
+    if not account:
+        raise HTTPException(status_code=401, detail="User record was not provisioned")
+    plan = account.get("plan", "free")
+    used = account.get("monthly_thread_count", 0)
+    limit = monthly_thread_limit(plan)
+    return {
+        "plan": plan,
+        "used": used,
+        "limit": limit,
+        "remaining": None if limit is None else max(0, limit - used),
+    }
 
 
 @router.get("/")

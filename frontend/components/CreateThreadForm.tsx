@@ -1,11 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { signIn, useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 
 import { AgentSelector } from "@/components/AgentSelector";
 import { apiFetch, type AgentSummary, type ThreadSummary } from "@/lib/api";
+
+type Quota = { plan: string; used: number; limit: number | null; remaining: number | null };
 
 export function CreateThreadForm({ agents }: { agents: AgentSummary[] }) {
   const router = useRouter();
@@ -13,10 +15,19 @@ export function CreateThreadForm({ agents }: { agents: AgentSummary[] }) {
   const [topic, setTopic] = useState("");
   const [visibility, setVisibility] = useState<"public" | "private">("public");
   const [selectedIds, setSelectedIds] = useState<string[]>(agents.slice(0, 2).map((agent) => agent.id));
+  const [quota, setQuota] = useState<Quota | null>(null);
+
+  useEffect(() => {
+    if (!session?.user) return;
+    apiFetch<Quota>("/api/threads/quota", {}, session.user)
+      .then(setQuota)
+      .catch(() => {});
+  }, [session]);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  const canSubmit = topic.trim().length >= 3 && selectedIds.length >= 2 && selectedIds.length <= 5;
+  const maxAgents = quota?.plan === "pro" || quota?.plan === "ultra" ? 8 : 4;
+  const canSubmit = topic.trim().length >= 3 && selectedIds.length >= 2 && selectedIds.length <= maxAgents;
   const chosenLabels = useMemo(
     () =>
       agents
@@ -31,7 +42,7 @@ export function CreateThreadForm({ agents }: { agents: AgentSummary[] }) {
       if (current.includes(agentId)) {
         return current.length > 2 ? current.filter((id) => id !== agentId) : current;
       }
-      if (current.length >= 5) {
+      if (current.length >= maxAgents) {
         return current;
       }
       return [...current, agentId];
@@ -45,7 +56,7 @@ export function CreateThreadForm({ agents }: { agents: AgentSummary[] }) {
     }
 
     if (!canSubmit) {
-      setError("テーマ3文字以上、人格は2〜5体で選択してください。");
+      setError(`テーマ3文字以上、人格は2〜${maxAgents}体で選択してください。`);
       return;
     }
 
@@ -85,7 +96,7 @@ export function CreateThreadForm({ agents }: { agents: AgentSummary[] }) {
         />
         <div className="mt-2 flex items-center justify-between text-xs text-board-muted">
           <span>{topic.length} / 500</span>
-          <span>{chosenLabels || "人格を2〜5体選択"}</span>
+          <span>{chosenLabels || `人格を2〜${maxAgents}体選択`}</span>
         </div>
       </div>
 
@@ -111,9 +122,21 @@ export function CreateThreadForm({ agents }: { agents: AgentSummary[] }) {
       {error ? <p className="mt-4 text-sm text-board-warn">{error}</p> : null}
 
       <div className="mt-6 flex items-center justify-between">
-        <p className="text-xs leading-6 text-board-muted">
-          無料プランは月5スレッド。テーマとユーザー投稿は OpenAI モデレーションで審査されます。
-        </p>
+        <div className="text-xs leading-6 text-board-muted">
+          <p>テーマとユーザー投稿は OpenAI モデレーションで審査されます。</p>
+          {quota && (
+            <p className="mt-0.5">
+              今月のスレッド作成:{" "}
+              {quota.limit === null ? (
+                <span className="font-semibold text-board-ink">{quota.used} 本（無制限）</span>
+              ) : (
+                <span className={`font-semibold ${quota.remaining === 0 ? "text-board-warn" : "text-board-ink"}`}>
+                  残り {quota.remaining} / {quota.limit} 本
+                </span>
+              )}
+            </p>
+          )}
+        </div>
         <button
           type="button"
           onClick={submit}

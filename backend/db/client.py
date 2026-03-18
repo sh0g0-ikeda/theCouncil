@@ -103,7 +103,9 @@ class DatabaseClient:
                 user = await self._normalize_thread_quota(conn, user_id)
                 if user["is_banned"]:
                     raise ValueError("user_banned")
-                if user["plan"] == "free" and user["monthly_thread_count"] >= 5:
+                from policies import monthly_thread_limit
+                _limit = monthly_thread_limit(user.get("plan", "free"))
+                if _limit is not None and user["monthly_thread_count"] >= _limit:
                     raise ValueError("free_plan_limit")
 
                 row = await conn.fetchrow(
