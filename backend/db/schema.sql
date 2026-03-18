@@ -36,6 +36,7 @@ CREATE TABLE threads (
   max_posts INTEGER NOT NULL DEFAULT 50,
   current_phase INTEGER NOT NULL DEFAULT 1,
   speed_mode VARCHAR NOT NULL DEFAULT 'normal' CHECK (speed_mode IN ('normal', 'fast', 'instant', 'paused')),
+  script_json JSONB,
   hidden_at TIMESTAMPTZ,
   locked_at TIMESTAMPTZ,
   deleted_at TIMESTAMPTZ,

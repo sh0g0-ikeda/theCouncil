@@ -11,8 +11,9 @@ from typing import Any
 
 from db.client import get_db
 from engine.facilitator import make_facilitate
-from engine.llm import LLMGenerationError, assign_debate_frame, compress_history, decompose_topic_axes
+from engine.llm import LLMGenerationError, assign_debate_frame, build_script_post_messages, call_llm, compress_history, decompose_topic_axes, generate_debate_script
 from engine.debate_state import DebateState
+from engine.rag import retrieve_chunks
 from engine.selector import select_conflict_axis, select_next_agent, select_silent_agent, select_target_post
 from engine.validator import SemanticPostAnalysis, summarize_target_claim
 from models.agent import Agent, IdeologyVector
@@ -403,38 +404,39 @@ def _should_facilitate(posts: list[dict[str, Any]], debate: "DebateState | None"
     return False
 
 
+_TURN_FAIL_LIMIT = 3  # skip a script turn after this many consecutive LLM failures
+
+
 async def run_discussion(
     thread_id: str,
     push_fn: Callable[[str, dict[str, Any]], Awaitable[None]],
 ) -> None:
     logger.info("run_discussion started for thread=%s", thread_id)
     db = get_db()
-    compressed_summary = ""
-    compressed_upto = 0
-    failed_agents: set[str] = set()
-    last_post_count = -1
-    user_reply_pending = 0
-    meta_reply_pending = 0
-    last_user_post_id: int | None = None
-    meta_target_post_id: int | None = None
-    meta_intervention_kind = ""
-    try:
-        saved_state = await db.load_debate_state(thread_id)
-    except Exception as exc:
-        if _is_missing_debate_state_error(exc):
-            logger.warning("load_debate_state skipped because debate state storage is unavailable", exc_info=True)
-            saved_state = None
-        else:
-            raise
-    debate = DebateState.from_dict(saved_state) if saved_state else DebateState()
-    last_speaker_id: str | None = None
     event_counter = 0
-    roles_initialized = debate.roles_initialized() and bool(debate.get_debate_frame())
-    moral_suction_active = 0  # countdown: resist moral framing for N more posts
+    user_reply_pending = 0
+    last_user_post_id: int | None = None
+    # ③ script cached outside loop — only (re)fetched when None
+    cached_script: dict[str, Any] | None = None
+    # ① separate counter: only advances on script turns, not user-reply turns
+    script_turn_index = 0
+    # ④ per-(script)turn failure counter
+    turn_fail_counts: dict[int, int] = {}
+    # initial_load_done: True after first full fetch_thread (which includes script_json)
+    initial_load_done = False
 
     try:
         while True:
-            thread = await db.fetch_thread(thread_id)
+            if not initial_load_done:
+                # First iteration: full fetch (includes script_json for cache priming)
+                thread = await db.fetch_thread(thread_id)
+                if thread:
+                    cached_script = thread.get("script_json") or None
+                initial_load_done = True
+            else:
+                # Subsequent iterations: lightweight fetch (no script_json ~20KB JSONB)
+                thread = await db.fetch_thread_state(thread_id)
+
             if not thread or thread.get("deleted_at"):
                 logger.info("run_discussion: thread=%s gone/deleted, stopping", thread_id)
                 break
@@ -445,62 +447,35 @@ async def run_discussion(
                 await asyncio.sleep(2)
                 continue
 
-            # ── Role + axis initialization (once per thread) ───────────────
-            if not roles_initialized:
-                agent_list = [
-                    agents[aid].persona
-                    for aid in thread["agent_ids"]
-                    if aid in agents
-                ]
-                try:
-                    debate_frame, axes = await asyncio.gather(
-                        assign_debate_frame(thread["topic"], agent_list),
-                        decompose_topic_axes(thread["topic"]),
-                    )
-                    frame_payload = debate_frame.get("frame", {}) if isinstance(debate_frame, dict) else {}
-                    assignments = debate_frame.get("assignments", {}) if isinstance(debate_frame, dict) else {}
-                    debate.set_debate_frame(frame_payload, assignments)
-                    debate.set_topic_axes(_sanitize_topic_axes(axes, thread["topic"], thread.get("topic_tags", [])))
-                    roles_initialized = True
-                    logger.info(
-                        "frame=%s assignments=%s axes=%s thread=%s",
-                        frame_payload,
-                        {k: v.get('side') for k, v in assignments.items()},
-                        axes,
-                        thread_id,
-                    )
-                except Exception:
-                    logger.warning("role/axis init failed", exc_info=True)
-                    roles_initialized = True  # don't retry on error
+            # paused check — before any LLM work
+            if thread.get("speed_mode") == "paused":
+                await asyncio.sleep(5)
+                continue
 
+            # ── Generate or load script (③ use cache, avoid per-iter DB traffic) ──
+            if cached_script is None:
+                cached_script = {}
+            if not cached_script or not isinstance(cached_script.get("turns"), list) or not cached_script["turns"]:
+                agent_list = [agents[aid].persona for aid in thread["agent_ids"] if aid in agents]
+                logger.info("Generating debate script for thread=%s", thread_id)
+                generated = await generate_debate_script(thread["topic"], agent_list, thread["max_posts"])
+                if generated.get("turns"):
+                    cached_script = generated
+                    await db.save_thread_script(thread_id, cached_script)
+                    logger.info("Script generated: %d turns for thread=%s", len(cached_script["turns"]), thread_id)
+                else:
+                    logger.warning("Script generation failed for thread=%s, retrying in 5s", thread_id)
+                    await asyncio.sleep(5)
+                    continue
+
+            turns: list[dict[str, Any]] = cached_script.get("turns", [])
             posts = await db.fetch_posts(thread_id)
-            latest_post_id = max((int(post.get("id") or 0) for post in posts), default=0)
-            debate.age_obligations(latest_post_id)
-            if len(posts) != last_post_count:
-                failed_agents.clear()
-                last_post_count = len(posts)
 
-            # ── Seed subquestions at thread start (once, no existing posts) ──
-            ai_posts_count = sum(1 for p in posts if p.get("agent_id"))
-            if not debate.thread_subquestions and ai_posts_count == 0:
-                debate.thread_subquestions = seed_subquestions(thread["topic"])
-            # ── Extract abstract terms for Phase 1 definitions ───────────────
-            if not debate.abstract_terms and ai_posts_count == 0:
-                debate.abstract_terms = _extract_abstract_nouns(thread["topic"], max_nouns=5)
-                # Register abstract terms as definition obligations if not already present
-                for term in debate.abstract_terms:
-                    if term not in debate.definition_requests:
-                        debate.definition_requests[term] = {
-                            "status": "open",
-                            "requested_post_id": 0,
-                            "requested_by": "system",
-                            "target_agent_id": None,
-                            "created_post_id": 0,
-                            "answered_post_id": None,
-                            "answered_by": None,
-                        }
+            if len(posts) >= thread["max_posts"]:
+                await db.update_thread_state(thread_id, "completed")
+                break
 
-            # Detect new user posts and queue 3 agent replies
+            # ── Detect new user posts → queue 2 AI replies ─────────────────
             for p in posts:
                 if (
                     p.get("agent_id") is None
@@ -509,372 +484,137 @@ async def run_discussion(
                     and (last_user_post_id is None or p["id"] > last_user_post_id)
                 ):
                     last_user_post_id = p["id"]
-                    meta_kind = _classify_user_intervention(p.get("content", ""))
-                    if meta_kind:
-                        meta_reply_pending = 1
-                        meta_target_post_id = p["id"]
-                        meta_intervention_kind = meta_kind
-                        user_reply_pending = 0
-                    else:
-                        user_reply_pending = 3
-                        meta_reply_pending = 0
-                        meta_target_post_id = None
-                        meta_intervention_kind = ""
-                    # If user post contains moralizing language, arm the suction guard
-                    if _is_moral_suction(p.get("content", "")):
-                        moral_suction_active = 5  # next 5 AI posts get resistance directive
+                    user_reply_pending = 2
 
-            if len(posts) >= thread["max_posts"]:
-                await db.update_thread_state(thread_id, "completed")
-                break
+            # ── Determine speaker + target + directive ─────────────────────
+            ai_posts = [p for p in posts if p.get("agent_id")]
+            is_user_reply_turn = user_reply_pending > 0
 
-            compressible_upto = max(0, len(posts) - 5)
-            while compressible_upto - compressed_upto >= 10:
-                batch = posts[compressed_upto:compressed_upto + 10]
-                try:
-                    compressed_summary = await compress_history(batch, compressed_summary)
-                except Exception:
-                    logger.warning("compress_history failed for thread=%s, skipping", thread_id, exc_info=True)
-                compressed_upto += 10
-
-            phase = _get_phase(len(posts))
-            if phase != thread["current_phase"]:
-                await db.update_thread_phase(thread_id, phase)
-
-            # ── Silent director (rule-based, event-driven, no visible post) ──
-            if _needs_director(posts, debate):
-                _run_director(thread, debate, agents, posts)
-
-            if _should_facilitate(posts, debate):
-                agent_display_names = {
-                    aid: agents[aid].display_name
-                    for aid in thread["agent_ids"] if aid in agents
-                }
-                try:
-                    facilitate = await make_facilitate(thread, posts, agent_display_names, debate)
-                except Exception:
-                    logger.warning("make_facilitate failed for thread=%s, skipping", thread_id, exc_info=True)
-                    facilitate = None
-                if facilitate and facilitate.get("content"):
-                    # Store axis assignments from rerail into DebateState
-                    ax_assignments = facilitate.get("axis_assignments", [])
-                    if ax_assignments:
-                        debate.push_axis_assignments(ax_assignments)
-                    followup_assignments = facilitate.get("followup_assignments", [])
-                    if followup_assignments:
-                        debate.push_followup_assignments([dict(item) for item in followup_assignments if isinstance(item, dict)])
-                    # Store facilitator constraint (next N posts must...)
-                    constraint_text = str(facilitate.get("constraint", "")).strip()
-                    if constraint_text:
-                        debate.set_facilitator_constraint(
-                            constraint_text,
-                            int(facilitate.get("constraint_turns", 2)),
-                            str(facilitate.get("constraint_kind", "")),
-                            dict(facilitate.get("constraint_schema") or {}),
-                        )
-                    post = await db.save_post(
-                        thread_id,
-                        None,
-                        {
-                            "reply_to": None,
-                            "content": facilitate["content"],
-                            "stance": "facilitate",
-                            "focus_axis": facilitate.get("main_axis", "rationalism"),
-                        },
-                        is_facilitator=True,
-                        token_usage=int(facilitate.get("_token_usage", 0)),
-                    )
-                    failed_agents.clear()
-                    debate.alerts.discard("camp_reassert")
-                    await push_fn(thread_id, post)
-                    continue
-
-            # ── Speaker selection ──────────────────────────────────────────
-            # Priority: user-reply > score-based > normal
-            newcomer_hint = False
-            # Hard-exclude agents who spoke in the last 3 AI posts (prevents 2-bot loop)
-            recent_ai_speakers = {p["agent_id"] for p in posts[-3:] if p.get("agent_id")}
-            if meta_reply_pending > 0:
-                try:
-                    speaker_id = _select_meta_speaker(thread["agent_ids"], posts, agents, failed_agents)
-                except ValueError:
-                    failed_agents.clear()
-                    await asyncio.sleep(0.5)
-                    continue
-            elif user_reply_pending > 0:
-                try:
-                    speaker_id = select_next_agent(thread, agents, posts, excluded_agent_ids=failed_agents, debate_state=debate)
-                except ValueError:
-                    failed_agents.clear()
-                    await asyncio.sleep(0.5)
-                    continue
-            else:
-                hard_excluded = failed_agents | recent_ai_speakers
-                stagnating = _detect_stagnation(posts, debate)
-                # Score-based priority: open attacks + agreement streak take precedence
-                priority = _prioritize_speaker(
-                    thread["agent_ids"], posts, debate, agents, hard_excluded
-                )
-                if priority:
-                    speaker_id = priority
-                elif stagnating:
-                    silent = select_silent_agent(thread, agents, posts, excluded_agent_ids=hard_excluded)
-                    speaker_id = silent if silent else _fallback_speaker(thread, agents, posts, hard_excluded)
-                    newcomer_hint = True
-                else:
-                    try:
-                        speaker_id = select_next_agent(thread, agents, posts, excluded_agent_ids=hard_excluded, debate_state=debate)
-                    except ValueError:
-                        try:
-                            speaker_id = select_next_agent(thread, agents, posts, excluded_agent_ids=failed_agents, debate_state=debate)
-                        except ValueError:
-                            failed_agents.clear()
-                            await asyncio.sleep(0.5)
-                            continue
-
-            # ── Target selection ───────────────────────────────────────────
-            if meta_reply_pending > 0:
-                target = next((p for p in reversed(posts) if p["id"] == meta_target_post_id), None)
-                if target is None:
-                    meta_reply_pending = 0
-                    meta_target_post_id = None
-                    meta_intervention_kind = ""
-                    target = select_target_post(posts, speaker_id, agents, debate_state=debate)
-            elif user_reply_pending > 0:
-                target = next((p for p in reversed(posts) if p["id"] == last_user_post_id), None)
-                if target is None:
+            if is_user_reply_turn:
+                # ① user-reply posts do NOT advance script_turn_index
+                last_ai_id = ai_posts[-1].get("agent_id") if ai_posts else None
+                candidates = [
+                    aid for aid in thread["agent_ids"]
+                    if aid in agents and aid != last_ai_id
+                ]
+                if not candidates:
+                    candidates = [aid for aid in thread["agent_ids"] if aid in agents]
+                if not candidates:
                     user_reply_pending = 0
-                    target = select_target_post(posts, speaker_id, agents, debate_state=debate)
+                    continue
+                speaker_id = random.choice(candidates)
+                target_post = next((p for p in reversed(posts) if p["id"] == last_user_post_id), None)
+                directive = "ユーザーの発言に対して、あなたの立場から挑発的に反論せよ。相手の前提を崩し、論点を鋭く絞り込め"
+                move_type = "counter"
+                phase = _get_phase(len(posts))
+                assigned_side = ""
+                user_reply_pending -= 1
             else:
-                target = select_target_post(posts, speaker_id, agents, debate_state=debate)
-            target_id = target["agent_id"] if target and target.get("agent_id") else None
-            axis = select_conflict_axis(speaker_id, target_id, agents) if target_id else "rationalism"
+                # ④ skip turns that have exceeded failure limit
+                while (
+                    script_turn_index < len(turns)
+                    and turn_fail_counts.get(script_turn_index, 0) >= _TURN_FAIL_LIMIT
+                ):
+                    logger.warning(
+                        "Skipping turn=%d after %d failures for thread=%s",
+                        script_turn_index, _TURN_FAIL_LIMIT, thread_id,
+                    )
+                    script_turn_index += 1
 
-            # ── Debate function selection ───────────────────────────────────
-            # Emotions (anger/contempt) affect prompt style only — not function selection
-            stagnating = _detect_stagnation(posts, debate)
-            next_directive = debate.peek_directive(speaker_id) or ""
-            next_constraint_kind = debate.peek_constraint_kind()
-            if meta_reply_pending > 0 and meta_intervention_kind:
-                debate_fn = "synthesize"
-            elif (
-                stagnating
-                and not debate.has_open_attack_against(speaker_id)
-                and not debate.has_pending_definition_response(speaker_id)
-                and not next_directive
-            ):
-                debate_fn = random.choice(["concretize", "differentiate", "attack"])
-            else:
-                debate_fn = _select_debate_function(
-                    speaker_id,
-                    phase,
-                    agents,
-                    debate,
-                    target=target,
-                    directive=next_directive,
-                    constraint_kind=next_constraint_kind,
-                )
+                if script_turn_index >= len(turns):
+                    await db.update_thread_state(thread_id, "completed")
+                    break
 
-            # ── Build context ──────────────────────────────────────────────
-            recent_posts = posts[compressed_upto:]
-            # Expand self-history to 4 for novelty detection
-            recent_self = [p["content"] for p in posts[-8:] if p.get("agent_id") == speaker_id][-4:]
-            is_first_post = not any(p.get("agent_id") == speaker_id for p in posts)
-            recent_others = [
-                p["content"] for p in posts[-6:]
-                if p.get("agent_id") and p.get("agent_id") != speaker_id
-            ]
-            available_arsenal = debate.get_available_arsenal(speaker_id, agents[speaker_id].persona)
-            stance_drift = debate.is_stance_drifting(speaker_id)
-            arsenal_novelty = debate.has_unused_arsenal(speaker_id, agents[speaker_id].persona)
-            debate_role = debate.get_debate_role(speaker_id)
-            assigned_side = debate.get_agent_side(speaker_id)
-            assigned_camp_function = debate.get_camp_function(speaker_id)
-            debate_frame = debate.get_debate_frame()
-            side_contract = debate.get_side_contract(speaker_id)
-            forced_axis = debate.peek_forced_axis(speaker_id)
-            private_directive = debate.peek_directive(speaker_id)
-            active_constraint, active_constraint_kind = debate.peek_constraint()
-            active_constraint_schema = debate.peek_constraint_schema()
-            agent_recent_axes = debate.get_agent_recent_axes(speaker_id)
-            uncovered_axes = debate.get_uncovered_axes()
-            pending_definition_terms = debate.get_unresolved_terms()
-            target_claim_units = debate.get_claim_units_for_post(target.get("id") if target else None)
-            priority_subquestion = debate.get_priority_subquestion_for(speaker_id)
-            position_anchor = debate.get_position_anchor(speaker_id)
-            retrieval_mode = _determine_retrieval_mode(debate_fn, pending_definition_terms, active_constraint_kind)
-            is_user_post_reply = ((user_reply_pending > 0 or meta_reply_pending > 0) and target is not None and target.get("user_id") is not None)
-            target_is_moral = is_user_post_reply and _is_moral_suction(target.get("content", "") if target else "")
-            required_local_stance = ""
-            target_side = debate.get_agent_side(target_id) if target_id else ""
-            if target_side and assigned_side in {"support", "oppose"} and target_side in {"support", "oppose"}:
-                required_local_stance = "disagree" if target_side != assigned_side else ""
-            camp_map_summary = " / ".join(
-                f"{aid}:{debate.get_agent_side(aid)}:{debate.get_camp_function(aid)}"
-                for aid in thread["agent_ids"]
-                if aid in agents
-            )
-            context = {
+                turn = turns[script_turn_index]
+                speaker_id = str(turn.get("agent_id", ""))
+                if speaker_id not in agents:
+                    candidates = [aid for aid in thread["agent_ids"] if aid in agents]
+                    if not candidates:
+                        logger.error("No agents available for thread=%s, stopping", thread_id)
+                        break
+                    speaker_id = random.choice(candidates)
+
+                reply_to_turn = turn.get("reply_to_turn")
+                if reply_to_turn is not None and isinstance(reply_to_turn, int) and reply_to_turn < len(ai_posts):
+                    target_post = ai_posts[reply_to_turn]
+                elif ai_posts:
+                    target_post = ai_posts[-1]
+                else:
+                    target_post = None
+
+                directive = str(turn.get("directive", "相手の主張に挑発的に反論せよ。前提の弱点を一点だけ突け"))
+                move_type = str(turn.get("move_type", "attack"))
+                phase = int(turn.get("phase", _get_phase(len(posts))))
+                assigned_side = str(turn.get("assigned_side", ""))
+
+            # ── RAG retrieval ──────────────────────────────────────────────
+            rag_context = {
                 "thread_topic": thread["topic"],
-                "current_tags": thread["topic_tags"],
-                "target_post": target or {},
-                "conflict_axis": axis,
-                "role": _role_for_phase(phase),
-                "phase": phase,
-                "conversation_summary": _build_conversation_summary(compressed_summary, recent_posts),
-                "debate_function": debate_fn,
-                "available_arsenal": available_arsenal,
-                "internal_state": debate.get_internal_state(speaker_id),
-                "recent_self_contents": recent_self,
-                "recent_other_contents": recent_others,
-                "stagnation": stagnating,
-                "newcomer_event": newcomer_hint,
-                "debate_role": debate_role,
-                "assigned_side": assigned_side,
-                "assigned_side_label": debate_frame.get(f"{assigned_side}_label", "") if assigned_side else "",
-                "opposing_side_label": debate_frame.get(f"{debate.get_opposing_side(speaker_id)}_label", ""),
-                "side_contract": str(side_contract.get("thesis", "")),
-                "assigned_camp_function": assigned_camp_function,
-                "frame_proposition": debate_frame.get("proposition", ""),
-                "support_label": debate_frame.get("support_label", ""),
-                "oppose_label": debate_frame.get("oppose_label", ""),
-                "conditional_label": debate_frame.get("conditional_label", ""),
-                "support_thesis": debate_frame.get("support_thesis", ""),
-                "oppose_thesis": debate_frame.get("oppose_thesis", ""),
-                "forced_axis": forced_axis or "",
-                "private_directive": private_directive or "",
-                "active_constraint": active_constraint or "",
-                "active_constraint_kind": active_constraint_kind or "",
-                "active_constraint_schema": active_constraint_schema,
-                "topic_axes": debate.topic_axes,
-                "agent_recent_axes": agent_recent_axes,
-                "uncovered_axes": uncovered_axes,
-                "stance_drift_warning": stance_drift,
-                "arsenal_novelty_push": arsenal_novelty,
-                "is_first_post": is_first_post,
-                "user_post_reply": is_user_post_reply,
-                "moral_suction_warning": target_is_moral or moral_suction_active > 0,
-                "target_claim_summary": summarize_target_claim(target or {}, axis),
-                "target_claim_units": target_claim_units,
-                "target_debate_role": debate.get_debate_role(target_id) if target_id else "",
-                "target_side": target_side,
-                "pending_definition_terms": pending_definition_terms,
-                "recent_argument_fingerprints": debate.recent_argument_fingerprints[-6:],
-                "forbidden_example_keys": debate.recent_example_keys[-4:],
-                "required_response_kind": debate_fn,
-                "required_proposition_stance": assigned_side if assigned_side in {"support", "oppose"} else "",
-                "required_local_stance": required_local_stance,
-                "required_subquestion_id": str(priority_subquestion.get("subquestion_id", "")) if priority_subquestion else "",
-                "required_subquestion_text": str(priority_subquestion.get("text", "")) if priority_subquestion else "",
-                "camp_map_summary": camp_map_summary,
-                "retrieval_mode": retrieval_mode,
-                "meta_intervention_kind": meta_intervention_kind if meta_reply_pending > 0 else "",
-                "position_anchor_summary": str(position_anchor.get("summary", "")),
-                "position_anchor_terms": list(position_anchor.get("terms", [])),
-                "position_anchor_side": str(position_anchor.get("side", "")),
-                "thread_subquestions": debate.thread_subquestions,
-                "debate_post_count": len(posts),
-                "abstract_terms": debate.abstract_terms,
-                "resolved_abstract_terms": [
-                    t for t, v in debate.definition_requests.items()
-                    if v.get("status") == "answered"
-                ],
-                "recent_agent_conclusions": [
-                    cs["structure"]["conclusion"]
-                    for cs in debate.open_claim_structures[-10:]
-                    if cs.get("agent_id") == speaker_id and cs.get("structure", {}).get("conclusion")
-                ],
-                "persona": agents[speaker_id].persona,
+                "conflict_axis": directive[:40],
+                "current_tags": thread.get("topic_tags", []),
+                "target_post": target_post or {},
             }
+            rag_chunks = retrieve_chunks(speaker_id, rag_context)
+
+            # ── Build prompt and call LLM ──────────────────────────────────
+            messages = build_script_post_messages(
+                persona=agents[speaker_id].persona,
+                directive=directive,
+                move_type=move_type,
+                target_post=target_post or {},
+                recent_posts=posts[-6:],
+                rag_chunks=rag_chunks,
+                thread_topic=thread["topic"],
+                phase=phase,
+                assigned_side=assigned_side,
+            )
 
             try:
-                reply = await agents[speaker_id].generate_reply(context)
+                reply = await call_llm(messages)
             except LLMGenerationError:
-                failed_agents.add(speaker_id)
                 logger.warning(
-                    "agent generation failed for thread=%s speaker=%s",
-                    thread_id,
-                    speaker_id,
-                    exc_info=True,
+                    "LLM failed for thread=%s turn=%d speaker=%s", thread_id, script_turn_index, speaker_id
                 )
-                await asyncio.sleep(0.1)
+                if not is_user_reply_turn:
+                    # ④ count failures per script turn
+                    turn_fail_counts[script_turn_index] = turn_fail_counts.get(script_turn_index, 0) + 1
+                await asyncio.sleep(1)
                 continue
 
-            semantic_payload = reply.get("_semantic_analysis") or {}
-            semantic_analysis = SemanticPostAnalysis.from_dict(semantic_payload)
-            focus_axis = semantic_analysis.effective_axis or reply.get("main_axis", axis)
-            used_arsenal_id = reply.get("used_arsenal_id")
-            arsenal_cooldown = debate.get_arsenal_cooldown_for_id(agents[speaker_id].persona, used_arsenal_id or "")
-            stance = reply.get("stance", "disagree")
+            phase_for_db = _get_phase(len(posts))
+            if phase_for_db != thread.get("current_phase"):
+                await db.update_thread_phase(thread_id, phase_for_db)
+
             post = await db.save_post(
                 thread_id,
                 speaker_id,
                 {
-                    "reply_to": target["id"] if target else None,
+                    "reply_to": target_post["id"] if target_post else None,
                     "content": reply["content"],
-                    "stance": stance,
-                    "focus_axis": focus_axis,
+                    "stance": reply.get("stance", "disagree"),
+                    "focus_axis": reply.get("main_axis", "rationalism"),
                 },
                 token_usage=int(reply.get("_token_usage", 0)),
             )
-            failed_agents.clear()
-            last_speaker_id = speaker_id
             event_counter += 1
-            debate.record_post(
-                speaker_id,
-                target or {},
-                focus_axis,
-                debate_function=debate_fn,
-                used_arsenal_id=used_arsenal_id,
-                arsenal_cooldown=arsenal_cooldown,
-                stance=stance,
-                post_id=post["id"],
-                analysis=semantic_analysis.as_dict(),
-                content=reply["content"],
-            )
-            # Record proposition fingerprint for camp reassertion detection
-            prop_fp = semantic_analysis.proposition_fingerprint
-            if prop_fp:
-                debate.record_proposition(speaker_id, prop_fp)
-                if debate.check_camp_reassert(speaker_id, prop_fp):
-                    debate.alerts.add("camp_reassert")
-            # Track open claim structures for director
-            claim_structure = semantic_analysis.claim_structure
-            if claim_structure and claim_structure.get("conclusion"):
-                debate.open_claim_structures.append({
-                    "agent_id": speaker_id,
-                    "post_id": post["id"],
-                    "structure": claim_structure,
-                })
-                if len(debate.open_claim_structures) > 20:
-                    debate.open_claim_structures.pop(0)
-            if forced_axis:
-                debate.pop_forced_axis(speaker_id)
-            if private_directive:
-                debate.pop_directive(speaker_id)
-            if active_constraint:
-                debate.consume_constraint()
-            if meta_reply_pending > 0:
-                meta_reply_pending -= 1
-                if meta_reply_pending <= 0:
-                    meta_target_post_id = None
-                    meta_intervention_kind = ""
-            elif user_reply_pending > 0:
-                user_reply_pending -= 1
-            if moral_suction_active > 0:
-                moral_suction_active -= 1
             await push_fn(thread_id, post)
-            if event_counter % 5 == 0:
-                try:
-                    await db.save_debate_state(thread_id, debate.to_dict())
-                except Exception:
-                    logger.warning("save_debate_state failed (table may not exist yet)", exc_info=True)
+
+            # ① advance script turn only when this was a script turn
+            if not is_user_reply_turn:
+                script_turn_index += 1
+                turn_fail_counts.pop(script_turn_index - 1, None)  # clean up on success
+
+            await asyncio.sleep(0.3)
+
     except Exception:
         logger.exception("run_discussion crashed for thread=%s", thread_id)
         raise
     finally:
         logger.info("run_discussion ended for thread=%s posts_generated=%d", thread_id, event_counter)
         _discussion_tasks.pop(thread_id, None)
+
+
+
 
 
 def _prioritize_speaker(

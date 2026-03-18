@@ -17,6 +17,8 @@ def _row_to_dict(row: Any | None) -> dict[str, Any] | None:
     data = dict(row)
     if "persona_json" in data and isinstance(data["persona_json"], str):
         data["persona_json"] = json.loads(data["persona_json"])
+    if "script_json" in data and isinstance(data["script_json"], str):
+        data["script_json"] = json.loads(data["script_json"])
     return data
 
 
@@ -186,6 +188,25 @@ class DatabaseClient:
             )
         return _row_to_dict(row)
 
+    async def fetch_thread_state(self, thread_id: str) -> dict[str, Any] | None:
+        """Lightweight per-loop poll: returns all thread fields except script_json (~20KB JSONB).
+
+        Use this inside the discussion loop. Use fetch_thread only for the initial script load.
+        """
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id, state, speed_mode, max_posts, current_phase,
+                       agent_ids, topic, topic_tags,
+                       user_id, visibility, hidden_at, locked_at, deleted_at, created_at
+                FROM threads
+                WHERE id = $1
+                """,
+                thread_id,
+            )
+        return _row_to_dict(row)
+
     async def fetch_posts(self, thread_id: str) -> list[dict[str, Any]]:
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
@@ -282,6 +303,15 @@ class DatabaseClient:
                 "SELECT id FROM threads WHERE state = 'running' AND deleted_at IS NULL"
             )
         return [str(row["id"]) for row in rows]
+
+    async def save_thread_script(self, thread_id: str, script: dict[str, Any]) -> None:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE threads SET script_json = $2::jsonb WHERE id = $1",
+                thread_id,
+                json.dumps(script),
+            )
 
     async def update_thread_state(self, thread_id: str, state: str) -> None:
         pool = await self._ensure_pool()

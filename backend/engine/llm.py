@@ -30,8 +30,8 @@ SYSTEM_PROMPT = """あなたは議論掲示板のAI人格である。なんJ・5
 
 【口調ルール】
 - なんJ・5ch風の砕けた口語体で書け
-- 「〜やろ」「〜やん」「〜やんけ」「〜ぞ」「〜やで」「〜なんよ」「ンゴ」「ぐうわか」「ガチで」等を自然に混ぜろ
-- 「草」「wwww」「w」は絶対禁止。文中・文末問わず一切使うな。
+- 「〜やろ」「〜やん」「〜やんけ」「〜ぞ」「〜やで」「〜なんよ」「ンゴ」「ぐうわか」「ガチで」「草」「w」等を自然に混ぜろ
+- 煽りOK。口が悪くてOK。相手の論を馬鹿にしてOK。
 - 論文調・説教調・ですます調・「〜である」体は失格
 
 【立場固定ルール】
@@ -48,8 +48,8 @@ SYSTEM_PROMPT = """あなたは議論掲示板のAI人格である。なんJ・5
 1. attack/steelman時は必ず「」で相手の語句を引用してから始めよ。引用なしは失格。
 2. テーマから外れた抽象論は失格。
 3. 80〜180文字・2〜4文で書け。
-4. 「一理あるが」「確かに〜だが」「重要だが〜も必要」等の調整型表現は禁止。
-5. 差別的発言・犯罪助長・個人攻撃は禁止。
+4. 「一理あるが」「確かに〜だが」「重要だが〜も必要」等の調整・譲歩型表現は禁止。
+5. 人種・民族・性別・障害等への差別的発言・犯罪助長は禁止。煽り・口の悪さ・相手の論への嘲笑はOK。
 6. 歴史的事例・固有名詞・数字を使う場合、直近で他者が使った事例・固有名詞の使い回しは即失格。自分の思想に固有の例を使え。
 
 JSONのみ出力:
@@ -641,6 +641,190 @@ async def assign_debate_frame(
             "camp_function": str(raw_assignment.get("camp_function") or fallback_assignment.get("camp_function") or ""),
         }
     return {"frame": frame, "assignments": assignments}
+
+
+_SCRIPT_POST_SYSTEM_PROMPT = """あなたは議論掲示板のAI人格だ。なんJ・5ch風の口語体で発言せよ。
+
+【スタイル】
+- 【今回の指令】を必ず実行せよ（指令無視は即失格）
+- 相手の主張の「前提の弱点」を一点だけ突け。漠然とした反論は失格
+- 「それだけ？」「その前提、証明できてる？」「で、実際どうなったん？」「アホか」「話になら」「お前それ本気で言っとるん？」「ほんまガバガバやな」のような格の違いを見せる一刺しを入れろ
+- 煽りOK。口が悪くてOK。相手の論を馬鹿にしてOK。
+- ただし人種・民族・性別・障害等への差別的発言は禁止
+
+【口調】
+- なんJ・5ch風の砕けた口語体。「〜やろ」「〜やん」「〜やんけ」「〜ぞ」「〜やで」「草」「w」も自然に使ってOK
+- 論文調・です/ます調・説教調は失格
+
+【禁止表現】
+- 「一理あるが」「確かに〜だが」「重要な観点だが」等の調整・クッション表現は禁止。譲歩するな
+- 漠然とした「それは違う」「問題がある」だけの反論は失格。必ず根拠・事例・数字で刺せ
+
+【文字数】80〜180文字・2〜4文
+
+JSONのみ出力:{"stance": "<disagree|agree|supplement|shift>", "main_axis": "<評価軸>", "content": "<本文>"}"""
+
+_PHASE_SCRIPT_HINTS: dict[int, str] = {
+    1: "定義期：キーワードの定義・前提から議論を始めよ",
+    2: "対立期：相手の前提を問い、論点を鋭くせよ",
+    3: "激化期：一点集中で相手の主張を崩せ",
+    4: "転換期：誰も触れていない角度から切り込め",
+    5: "総括期：合意不能な核心的対立を浮き彫りにせよ",
+}
+
+
+async def generate_debate_script(
+    topic: str,
+    agent_list: list[dict[str, Any]],
+    max_posts: int = 20,
+) -> dict[str, Any]:
+    """Generate a per-turn debate script using GPT-4o. Returns {} on failure."""
+    if not os.getenv("OPENAI_API_KEY") or not agent_list:
+        return {}
+
+    agent_lines = []
+    for agent in agent_list:
+        wv = ", ".join(agent.get("worldview", [])[:3])
+        nn = agent.get("speech_constraints", {}).get("non_negotiable", "")[:80]
+        agent_lines.append(
+            f'{agent["id"]}({agent["display_name"]}): 世界観={wv}. 絶対に譲れない立場={nn}'
+        )
+
+    act3_start = max(3, max_posts // 3)
+    act4_start = max(act3_start + 2, max_posts * 2 // 3)
+    act5_start = max(act4_start + 2, max_posts * 85 // 100)
+
+    system_msg = (
+        "あなたは「哲学バトル漫画」の脚本家だ。議論を評論会ではなくドラマとして設計せよ。\n"
+        "\n"
+        "【最重要：ドラマとして機能する3条件】\n"
+        "1. 真の対立 — 最低1名は議題の前提そのものを「NO・そんなことはない」と否定する否定派として配置せよ。全員が同方向を向く台本は失格。\n"
+        "2. エスカレーション — アクトが進むにつれ論点が深化・過激化すること。後半の発言が前半より刺激が弱ければ失格。\n"
+        "3. 転換点 — turn " + str(act3_start) + "付近と" + str(act4_start) + "付近に「事件」を起こせ（予想外の反論・極論・具体数字による既存論の否定・矛盾の暴露など）。\n"
+        "\n"
+        "【陣営割り当て】\n"
+        "各エージェントのworldviewとnon_negotiableを読み、議題への自然な立場を判断し assigned_side を決めよ。\n"
+        "  oppose（否定派）: 最低1名必須。議題の前提を否定し、賛成派と真正面から衝突する\n"
+        "  support（肯定派）: 議題を積極的に支持する\n"
+        "  neutral（整理役）: 最大1名まで。両者の対立軸を再定義したり新論点を投入する役\n"
+        "全員supportや全員の主張が似通う割り当ては失格。\n"
+        "\n"
+        "【論点ローテーション計画（必須）】\n"
+        "台本の冒頭で、この議題で議論できる論点を6〜8個リストアップし、台本を通じてこれらが順番に登場するよう設計せよ。\n"
+        "同じエージェントが同じ論点を2回使うことは禁止。3ターンごとに少なくとも1つの新論点が出ること。\n"
+        "\n"
+        "【ACT構造（必須）】\n"
+        f"  ACT1（turn 0〜2）: 各キャラが立場を断言。定義の衝突を起こせ\n"
+        f"  ACT2（turn 3〜{act3_start - 1}）: 直接衝突。相手の前提を崩す攻撃\n"
+        f"  ACT3（turn {act3_start}〜{act4_start - 1}）: エスカレーション。事件を起こせ（極論・具体数字・矛盾暴露）\n"
+        f"  ACT4（turn {act4_start}〜{act5_start - 1}）: 深化。それまでの議論で浮かんだ本質的対立へ\n"
+        f"  ACT5（turn {act5_start}〜）: 収束/決裂。合意不能な核心を明示\n"
+        "\n"
+        "【キャラは思想の化身】\n"
+        "エージェントはそれぞれ固有の思想体系を持つ。worldview/non_negotiableを読み、そのキャラだけが言える切り口でdirectiveを書け。\n"
+        "汎用的な評論家口調（「バブルはある。ただ本物は残る」等）は失格。キャラの思想的アイデンティティを体現させよ。\n"
+        "\n"
+        "【directiveの質基準】\n"
+        "  失格例: 「AIバブルについて自分の立場を述べよ」\n"
+        "  合格例: 「マスクの『技術とバブルは分離できる』という前提を崩せ。電気革命でも9割の技術企業が消えた事実を突きつけ、生存したのは独占的インフラを握った1社だけだと主張せよ」\n"
+        "directiveは具体的な攻撃対象・使う論拠・到達すべき主張の3要素を含めよ。\n"
+        "\n"
+        "【その他ルール】\n"
+        "- 同じエージェントが連続しないこと。opposeとsupportが交互になるよう配慮せよ\n"
+        "- reply_to_turn: 反論時は必ず相手のturn番号を指定し議論が噛み合うようにせよ\n"
+        "- target_claim: 反論時に攻撃対象を30字以内で明記せよ\n"
+        "\n"
+        'JSONのみ出力: {"proposition": "...", "discussion_topics": ["論点1", ...], "turns": ['
+        '{"turn": 0, "agent_id": "...", "assigned_side": "support|oppose|neutral", "phase": 1, '
+        '"move_type": "opening_statement", "directive": "...", "reply_to_turn": null, "target_claim": null}, ...]}\n'
+        "move_type: opening_statement, counter_definition, attack, steelman_and_break, concretize, reframe, new_evidence, expose_contradiction, synthesize, expose_split"
+    )
+    user_msg = (
+        f"議題: {topic}\n\n"
+        "参加エージェント:\n" + "\n".join(agent_lines) + "\n\n"
+        f"台本のターン数: {max_posts}\n\n"
+        "上記の仕様で台本を生成せよ。"
+    )
+
+    try:
+        response = await _get_client().chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": user_msg},
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=4000,
+            temperature=0.75,
+        )
+        payload = json.loads(response.choices[0].message.content or "{}")
+        if not isinstance(payload.get("turns"), list) or not payload["turns"]:
+            return {}
+        return payload
+    except Exception:
+        return {}
+
+
+def build_script_post_messages(
+    persona: dict[str, Any],
+    directive: str,
+    move_type: str,
+    target_post: dict[str, Any],
+    recent_posts: list[dict[str, Any]],
+    rag_chunks: list[str],
+    thread_topic: str,
+    phase: int = 2,
+    assigned_side: str = "",
+) -> list[dict[str, str]]:
+    """Build messages for a script-driven post (single LLM call, no retries)."""
+    name = persona.get("display_name", "?")
+    label = persona.get("label", "")
+    worldview = ", ".join(persona.get("worldview", [])[:3])
+    non_negotiable = persona.get("speech_constraints", {}).get("non_negotiable", "")
+    tone = persona.get("speech_constraints", {}).get("tone", "")
+
+    # Side declaration — the most important identity anchor
+    side_line = ""
+    if assigned_side == "oppose":
+        side_line = f"\n⚔️ 【配役：否定派】「{thread_topic[:40]}」に対してNO・そんなことはないという立場を一切曲げるな。賛成側の論を認める発言は立場崩壊=失格。"
+    elif assigned_side == "support":
+        side_line = f"\n⚔️ 【配役：肯定派】「{thread_topic[:40]}」に対してYES・その通りという立場を一切曲げるな。否定側の論に乗り換えるのは立場崩壊=失格。"
+    elif assigned_side == "neutral":
+        side_line = "\n⚔️ 【配役：整理役】両陣営どちらにも肩入れせず、論点の再定義・新軸の投入・対立の構造化をせよ。"
+
+    persona_block = f"【{name}／{label}】\n世界観: {worldview}"
+    if non_negotiable:
+        persona_block += f"\n絶対に譲れない立場: {non_negotiable}"
+    if tone:
+        persona_block += f"\n口調: {tone}"
+    if side_line:
+        persona_block += side_line
+
+    target_content = str(target_post.get("content", ""))[:140]
+    target_name = target_post.get("display_name") or target_post.get("agent_id") or "不明"
+    target_id = target_post.get("id", "?")
+
+    recent_lines = "\n".join(
+        f"#{p.get('id', '?')} {p.get('display_name') or p.get('agent_id') or '?'}: {str(p.get('content', ''))[:80]}"
+        for p in recent_posts[-5:]
+    )
+    rag_text = "\n".join(f"- {chunk}" for chunk in rag_chunks[:3]) if rag_chunks else "なし"
+    phase_hint = _PHASE_SCRIPT_HINTS.get(phase, "")
+
+    user_content = (
+        f"テーマ: {thread_topic}\n"
+        f"{persona_block}\n\n"
+        f"【今回の指令（必須・最優先）】{directive}\n"
+        f"【行動タイプ】{move_type} / 【{phase_hint}】\n\n"
+        f"返信先 #{target_id}({target_name}): {target_content}\n\n"
+        f"直近の発言:\n{recent_lines}\n\n"
+        f"知識:\n{rag_text}"
+    )
+
+    return [
+        {"role": "system", "content": _SCRIPT_POST_SYSTEM_PROMPT},
+        {"role": "user", "content": user_content},
+    ]
 
 
 async def decompose_topic_axes(topic: str) -> list[str]:

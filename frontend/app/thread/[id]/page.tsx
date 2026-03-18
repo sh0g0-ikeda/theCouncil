@@ -8,6 +8,13 @@ import { PostList } from "@/components/PostList";
 import { apiFetch, type PostRecord, type ThreadSummary } from "@/lib/api";
 import { createThreadSocket } from "@/lib/websocket";
 
+const LOADING_TELOPS = [
+  "エージェントを呼び出しています",
+  "エージェントがタイムマシンに乗りました",
+  "まもなくエージェントが現代へ到着します",
+  "エージェントが席に着きました",
+];
+
 function mergePost(current: PostRecord[], incoming: PostRecord) {
   if (current.some((post) => post.id === incoming.id && post.created_at === incoming.created_at)) {
     return current;
@@ -27,6 +34,7 @@ export default function ThreadPage() {
   const [sending, setSending] = useState(false);
   const [shared, setShared] = useState(false);
   const [quota, setQuota] = useState<{ remaining: number | null; limit: number | null } | null>(null);
+  const [telopIndex, setTelopIndex] = useState(0);
 
   useEffect(() => {
     if (!session?.user) return;
@@ -34,6 +42,17 @@ export default function ThreadPage() {
       .then(setQuota)
       .catch(() => {});
   }, [session, shared]);
+  const aiPostCount = posts.filter((p) => p.agent_id).length;
+  const showTelop = aiPostCount === 0 && thread?.state === "running";
+
+  useEffect(() => {
+    if (!showTelop) return;
+    const id = setInterval(() => {
+      setTelopIndex((i) => (i + 1) % LOADING_TELOPS.length);
+    }, 8000);
+    return () => clearInterval(id);
+  }, [showTelop]);
+
   const bottomRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const activeRef = useRef(true);
@@ -215,7 +234,20 @@ export default function ThreadPage() {
         </div>
       </section>
 
+      {showTelop && (
+        <div className="flex items-center gap-3 rounded-2xl border border-board-border bg-board-paper px-5 py-4 text-sm text-board-muted">
+          <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-board-accent border-t-transparent" />
+          <span key={telopIndex} className="animate-pulse">{LOADING_TELOPS[telopIndex]}</span>
+        </div>
+      )}
+
       <PostList posts={posts} />
+
+      {/* Ad placeholder */}
+      <div className="flex h-16 items-center justify-center rounded-2xl border border-dashed border-board-border bg-board-paper/50 text-xs text-board-muted">
+        広告スペース
+      </div>
+
       <div ref={bottomRef} />
 
       <section className="sticky bottom-4 rounded-3xl border border-board-border bg-board-paper/95 p-4 shadow-board backdrop-blur">
