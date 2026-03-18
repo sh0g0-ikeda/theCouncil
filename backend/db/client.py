@@ -234,6 +234,14 @@ class DatabaseClient:
             )
         return _row_to_dict(row) or {}
 
+    async def list_running_thread_ids(self) -> list[str]:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id FROM threads WHERE state = 'running' AND deleted_at IS NULL"
+            )
+        return [str(row["id"]) for row in rows]
+
     async def update_thread_state(self, thread_id: str, state: str) -> None:
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:

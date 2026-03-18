@@ -18,7 +18,7 @@ from api.posts import router as posts_router
 from api.threads import router as threads_router
 from db.client import get_db
 from environment import is_production_environment
-from engine.discussion import agents, load_agents
+from engine.discussion import agents, load_agents, start_discussion
 from rate_limit import limiter
 from realtime import connection_manager
 
@@ -116,6 +116,21 @@ async def startup() -> None:
         await get_db().sync_agents_from_disk([a.persona for a in agents.values()])
     except Exception:
         logger.warning("agent DB sync failed at startup", exc_info=True)
+    # Resume any discussions that were running when the server last stopped
+    try:
+        running_ids = await get_db().list_running_thread_ids()
+
+        def _make_push(tid: str):
+            async def _push(thread_id: str, post: dict) -> None:
+                await connection_manager.broadcast(thread_id, post)
+            return _push
+
+        for tid in running_ids:
+            await start_discussion(tid, _make_push(tid))
+        if running_ids:
+            logger.info("resumed %d running discussion(s) at startup", len(running_ids))
+    except Exception:
+        logger.warning("failed to resume running discussions at startup", exc_info=True)
 
 
 @app.on_event("shutdown")
