@@ -112,6 +112,22 @@ async def list_threads(
     return await db.list_threads(sort=sort, limit=limit)
 
 
+@router.post("/{thread_id}/share")
+@limiter.limit("10/minute")
+async def share_thread(
+    request: Request,
+    thread_id: str,
+    user: RequestUser = Depends(require_user),
+    db: DatabaseClient = Depends(get_db),
+) -> dict[str, Any]:
+    thread = await db.fetch_thread(thread_id)
+    if not thread or thread.get("deleted_at"):
+        raise HTTPException(status_code=404, detail="Thread not found")
+    internal_id = await db.ensure_user_from_request(user.id, user.email)
+    granted = await db.record_thread_share(internal_id, thread_id)
+    return {"granted": granted, "bonus": 5 if granted else 0}
+
+
 @router.get("/{thread_id}")
 @limiter.limit("90/minute")
 async def get_thread(

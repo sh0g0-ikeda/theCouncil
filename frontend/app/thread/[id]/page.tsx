@@ -25,6 +25,7 @@ export default function ThreadPage() {
   const [input, setInput] = useState("");
   const [error, setError] = useState("");
   const [sending, setSending] = useState(false);
+  const [shared, setShared] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const activeRef = useRef(true);
@@ -130,6 +131,21 @@ export default function ThreadPage() {
     }
   };
 
+  const shareOnX = async () => {
+    const url = `${window.location.origin}/thread/${threadId}`;
+    const text = `みんなの疑問を偉人AIが議論する掲示板！The Council`;
+    const xUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`;
+    window.open(xUrl, "_blank", "noopener,noreferrer");
+    if (session?.user && !shared) {
+      try {
+        await apiFetch(`/api/threads/${threadId}/share`, { method: "POST" }, session.user);
+        setShared(true);
+      } catch {
+        // bonus grant failure is non-critical
+      }
+    }
+  };
+
   if (!thread) {
     return (
       <main className="rounded-3xl border border-board-border bg-board-paper p-6 text-sm text-board-muted shadow-board">
@@ -142,7 +158,7 @@ export default function ThreadPage() {
     <main className="space-y-4">
       <section className="rounded-3xl border border-board-border bg-board-paper p-5 shadow-board">
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-          <div>
+          <div className="min-w-0 flex-1">
             <h1 className="text-xl font-bold text-board-ink">{thread.topic}</h1>
             <p className="mt-2 text-sm leading-6 text-board-muted">
               <span className="hidden sm:inline">{thread.agent_ids.join(" / ")} ・ </span>
@@ -155,6 +171,16 @@ export default function ThreadPage() {
               )}
             </p>
           </div>
+          <button
+            type="button"
+            onClick={shareOnX}
+            className="flex shrink-0 items-center gap-1.5 rounded-full border border-board-border bg-white px-3 py-1.5 text-xs font-semibold text-board-ink transition hover:bg-black hover:text-white"
+          >
+            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 fill-current" aria-hidden="true">
+              <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.746l7.73-8.835L1.254 2.25H8.08l4.258 5.63 5.906-5.63Zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+            </svg>
+            {shared ? "共有済み" : "共有 +5"}
+          </button>
         </div>
       </section>
 

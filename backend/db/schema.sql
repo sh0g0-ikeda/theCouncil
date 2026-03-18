@@ -78,6 +78,13 @@ CREATE TABLE reports (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE thread_shares (
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  thread_id UUID REFERENCES threads(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (user_id, thread_id)
+);
+
 CREATE INDEX chunks_tags_idx ON chunks USING gin(tags);
 CREATE INDEX chunks_fts_idx ON chunks USING gin(to_tsvector('simple', text));
 CREATE INDEX posts_thread_created_idx ON posts(thread_id, created_at);

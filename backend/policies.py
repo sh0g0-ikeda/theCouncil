@@ -14,7 +14,7 @@ PLAN_MAX_AGENTS = {
 
 # None = unlimited
 PLAN_MONTHLY_THREADS: dict[str, int | None] = {
-    "free": 5,
+    "free": 3,
     "pro": 30,
     "ultra": None,
 }

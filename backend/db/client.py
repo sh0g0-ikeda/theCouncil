@@ -236,6 +236,39 @@ class DatabaseClient:
             )
         return _row_to_dict(row) or {}
 
+    async def record_thread_share(self, user_id: str, thread_id: str) -> bool:
+        """Record an X share and grant +5 thread quota. Returns False if already shared."""
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                existing = await conn.fetchval(
+                    "SELECT 1 FROM thread_shares WHERE user_id = $1 AND thread_id = $2",
+                    user_id, thread_id,
+                )
+                if existing:
+                    return False
+                await conn.execute(
+                    "INSERT INTO thread_shares (user_id, thread_id) VALUES ($1, $2)",
+                    user_id, thread_id,
+                )
+                # Grant +5 bonus by reducing used count (floor at 0)
+                await conn.execute(
+                    """UPDATE users
+                       SET monthly_thread_count = GREATEST(0, monthly_thread_count - 5)
+                       WHERE id = $1""",
+                    user_id,
+                )
+        return True
+
+    async def has_shared_thread(self, user_id: str, thread_id: str) -> bool:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchval(
+                "SELECT 1 FROM thread_shares WHERE user_id = $1 AND thread_id = $2",
+                user_id, thread_id,
+            )
+        return bool(row)
+
     async def list_running_thread_ids(self) -> list[str]:
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
