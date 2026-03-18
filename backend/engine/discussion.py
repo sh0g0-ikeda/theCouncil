@@ -407,6 +407,7 @@ async def run_discussion(
     thread_id: str,
     push_fn: Callable[[str, dict[str, Any]], Awaitable[None]],
 ) -> None:
+    logger.info("run_discussion started for thread=%s", thread_id)
     db = get_db()
     compressed_summary = ""
     compressed_upto = 0
@@ -433,11 +434,12 @@ async def run_discussion(
 
     try:
         while True:
-          try:
             thread = await db.fetch_thread(thread_id)
             if not thread or thread.get("deleted_at"):
+                logger.info("run_discussion: thread=%s gone/deleted, stopping", thread_id)
                 break
             if thread["state"] == "completed":
+                logger.info("run_discussion: thread=%s completed, stopping", thread_id)
                 break
             if thread["state"] != "running":
                 await asyncio.sleep(2)
@@ -529,7 +531,10 @@ async def run_discussion(
             compressible_upto = max(0, len(posts) - 5)
             while compressible_upto - compressed_upto >= 10:
                 batch = posts[compressed_upto:compressed_upto + 10]
-                compressed_summary = await compress_history(batch, compressed_summary)
+                try:
+                    compressed_summary = await compress_history(batch, compressed_summary)
+                except Exception:
+                    logger.warning("compress_history failed for thread=%s, skipping", thread_id, exc_info=True)
                 compressed_upto += 10
 
             phase = _get_phase(len(posts))
@@ -545,7 +550,11 @@ async def run_discussion(
                     aid: agents[aid].display_name
                     for aid in thread["agent_ids"] if aid in agents
                 }
-                facilitate = await make_facilitate(thread, posts, agent_display_names, debate)
+                try:
+                    facilitate = await make_facilitate(thread, posts, agent_display_names, debate)
+                except Exception:
+                    logger.warning("make_facilitate failed for thread=%s, skipping", thread_id, exc_info=True)
+                    facilitate = None
                 if facilitate and facilitate.get("content"):
                     # Store axis assignments from rerail into DebateState
                     ax_assignments = facilitate.get("axis_assignments", [])
@@ -860,12 +869,11 @@ async def run_discussion(
                     await db.save_debate_state(thread_id, debate.to_dict())
                 except Exception:
                     logger.warning("save_debate_state failed (table may not exist yet)", exc_info=True)
-          except asyncio.CancelledError:
-              raise
-          except Exception:
-              logger.exception("debate loop iteration failed for thread=%s, retrying in 5s", thread_id)
-              await asyncio.sleep(5)
+    except Exception:
+        logger.exception("run_discussion crashed for thread=%s", thread_id)
+        raise
     finally:
+        logger.info("run_discussion ended for thread=%s posts_generated=%d", thread_id, event_counter)
         _discussion_tasks.pop(thread_id, None)
 
 
