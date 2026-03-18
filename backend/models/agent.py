@@ -41,7 +41,7 @@ class Agent:
         self,
         context: dict[str, Any],
         retry_hint: str | None = None,
-        max_attempts: int = 3,
+        max_attempts: int = 2,
     ) -> dict[str, Any]:
         from engine.llm import LLMGenerationError, build_prompt, call_llm, validate_reply_length
         from engine.rag import retrieve_chunks

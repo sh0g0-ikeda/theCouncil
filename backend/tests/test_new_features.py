@@ -376,7 +376,7 @@ def test_phase1_blocks_attack_when_abstract_terms():
             "required_response_kind": "attack",
             "target_post": {},
             "abstract_terms": ["独裁", "正当性"],
-            "debate_post_count": 3,
+            "debate_post_count": 2,
             "assigned_side": "oppose",
         }
     )

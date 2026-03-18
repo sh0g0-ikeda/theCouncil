@@ -5,7 +5,6 @@ import { signIn, useSession } from "next-auth/react";
 import { useParams } from "next/navigation";
 
 import { PostList } from "@/components/PostList";
-import { SpeedControl } from "@/components/SpeedControl";
 import { apiFetch, type PostRecord, type ThreadSummary } from "@/lib/api";
 import { createThreadSocket } from "@/lib/websocket";
 
@@ -131,26 +130,6 @@ export default function ThreadPage() {
     }
   };
 
-  const updateSpeed = async (mode: string) => {
-    if (!session?.user) {
-      await signIn();
-      return;
-    }
-    try {
-      await apiFetch(
-        `/api/threads/${threadId}/speed`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({ mode })
-        },
-        session.user
-      );
-      setThread((current) => (current ? { ...current, speed_mode: mode } : current));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "速度変更に失敗しました");
-    }
-  };
-
   if (!thread) {
     return (
       <main className="rounded-3xl border border-board-border bg-board-paper p-6 text-sm text-board-muted shadow-board">
@@ -176,7 +155,6 @@ export default function ThreadPage() {
               )}
             </p>
           </div>
-          <SpeedControl value={thread.speed_mode ?? "normal"} onChange={updateSpeed} />
         </div>
       </section>
 

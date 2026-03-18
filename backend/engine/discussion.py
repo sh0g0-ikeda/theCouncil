@@ -191,8 +191,6 @@ def _determine_retrieval_mode(
     return "default"
 
 
-SPEED = {"slow": 8.5, "normal": 3.5, "fast": 0.3, "instant": 0.1, "paused": 999.0}
-
 
 def load_agents() -> None:
     agents.clear()
@@ -578,7 +576,6 @@ async def run_discussion(
                     )
                     failed_agents.clear()
                     await push_fn(thread_id, post)
-                    await asyncio.sleep(SPEED.get(thread["speed_mode"], 5.0))
                     continue
 
             # ── Speaker selection ──────────────────────────────────────────
@@ -861,7 +858,6 @@ async def run_discussion(
                     await db.save_debate_state(thread_id, debate.to_dict())
                 except Exception:
                     logger.warning("save_debate_state failed (table may not exist yet)", exc_info=True)
-            await asyncio.sleep(SPEED.get(thread["speed_mode"], 5.0))
     finally:
         _discussion_tasks.pop(thread_id, None)
 

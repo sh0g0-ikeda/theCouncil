@@ -650,7 +650,7 @@ def validate_generated_reply(reply: dict[str, Any], context: dict[str, Any]) -> 
     abstract_terms = [str(t) for t in context.get("abstract_terms", []) if str(t).strip()]
     pending_abstract = [t for t in abstract_terms if t not in {str(v) for v in context.get("resolved_abstract_terms", [])}]
     if (
-        debate_post_count <= 4
+        debate_post_count <= 2
         and analysis.effective_function not in {"define", "differentiate", "facilitate"}
         and pending_abstract
     ):
