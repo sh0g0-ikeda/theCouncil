@@ -119,6 +119,8 @@ def select_next_agent(
     for agent_id in participant_ids:
         if agent_id == last_agent_id or agent_id in excluded_agent_ids:
             continue
+        if agent_id not in agents:
+            continue
         agent = agents[agent_id]
 
         # Hard guard: if this agent appeared >= 2 of last 5 AI posts and others have 0, skip
@@ -201,7 +203,7 @@ def select_target_post(
     Uses recency-deduplication so the same post is not targeted by consecutive
     speakers, and adds a recency bonus so recent posts are more likely targets.
     """
-    speaker_vector = agents[speaker_id].vector
+    speaker_vector = agents[speaker_id].vector if speaker_id in agents else None
 
     if debate_state is not None:
         priority_subquestion_post_id = getattr(debate_state, "get_priority_subquestion_post_id_for", lambda _aid: None)(speaker_id)
@@ -240,7 +242,7 @@ def select_target_post(
             continue
         seen_agents.add(agent_id)
 
-        distance = agents[agent_id].vector.manhattan_distance(speaker_vector)
+        distance = agents[agent_id].vector.manhattan_distance(speaker_vector) if speaker_vector else 0.5
         # Recency bonus: first 5 in reversed order get +10
         recency = max(0.0, (5 - i) * 2.0)
         weight = max(distance + recency, 1.0)
@@ -271,6 +273,8 @@ def select_target_post(
 
 
 def select_conflict_axis(speaker_id: str, target_id: str, agents: dict[str, Any]) -> str:
+    if speaker_id not in agents or target_id not in agents:
+        return "rationalism"
     speaker_vector = agents[speaker_id].vector.as_list()
     target_vector = agents[target_id].vector.as_list()
     diffs = [abs(s - t) for s, t in zip(speaker_vector, target_vector)]
