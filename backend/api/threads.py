@@ -18,7 +18,7 @@ class CreateThreadRequest(BaseModel):
     topic: str = Field(min_length=3, max_length=500)
     agent_ids: list[str]
     visibility: str = "public"
-    max_posts: int = Field(default=30, ge=10, le=200)
+    max_posts: int = Field(default=20, ge=10, le=20)
 
 
 class SpeedRequest(BaseModel):
@@ -34,7 +34,7 @@ async def create_thread(
     db: DatabaseClient = Depends(get_db),
 ) -> dict[str, Any]:
     agent_ids = list(dict.fromkeys(req.agent_ids))
-    if not (3 <= len(agent_ids) <= 8):
+    if not (2 <= len(agent_ids) <= 5):
         raise HTTPException(status_code=400, detail="参加人格は3〜8体です")
     if req.visibility not in {"public", "private"}:
         raise HTTPException(status_code=400, detail="Invalid visibility")

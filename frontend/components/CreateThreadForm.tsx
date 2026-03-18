@@ -12,11 +12,11 @@ export function CreateThreadForm({ agents }: { agents: AgentSummary[] }) {
   const { data: session } = useSession();
   const [topic, setTopic] = useState("");
   const [visibility, setVisibility] = useState<"public" | "private">("public");
-  const [selectedIds, setSelectedIds] = useState<string[]>(agents.slice(0, 3).map((agent) => agent.id));
+  const [selectedIds, setSelectedIds] = useState<string[]>(agents.slice(0, 2).map((agent) => agent.id));
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  const canSubmit = topic.trim().length >= 3 && selectedIds.length >= 3 && selectedIds.length <= 8;
+  const canSubmit = topic.trim().length >= 3 && selectedIds.length >= 2 && selectedIds.length <= 5;
   const chosenLabels = useMemo(
     () =>
       agents
@@ -29,9 +29,9 @@ export function CreateThreadForm({ agents }: { agents: AgentSummary[] }) {
   const toggleAgent = (agentId: string) => {
     setSelectedIds((current) => {
       if (current.includes(agentId)) {
-        return current.length > 3 ? current.filter((id) => id !== agentId) : current;
+        return current.length > 2 ? current.filter((id) => id !== agentId) : current;
       }
-      if (current.length >= 8) {
+      if (current.length >= 5) {
         return current;
       }
       return [...current, agentId];
@@ -45,7 +45,7 @@ export function CreateThreadForm({ agents }: { agents: AgentSummary[] }) {
     }
 
     if (!canSubmit) {
-      setError("テーマ3文字以上、人格は3〜8体で選択してください。");
+      setError("テーマ3文字以上、人格は2〜5体で選択してください。");
       return;
     }
 
@@ -85,7 +85,7 @@ export function CreateThreadForm({ agents }: { agents: AgentSummary[] }) {
         />
         <div className="mt-2 flex items-center justify-between text-xs text-board-muted">
           <span>{topic.length} / 500</span>
-          <span>{chosenLabels || "人格を3〜8体選択"}</span>
+          <span>{chosenLabels || "人格を2〜5体選択"}</span>
         </div>
       </div>
 
