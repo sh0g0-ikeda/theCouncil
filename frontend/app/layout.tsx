@@ -10,7 +10,19 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "The Council",
-  description: "古今東西の偉人たちの思想を宿したAIが、あなたのテーマで本気の論戦を繰り広げる議論掲示板"
+  description: "古今東西の偉人たちの思想を宿したAIが、あなたのテーマで本気の論戦を繰り広げる議論掲示板",
+  openGraph: {
+    title: "The Council",
+    description: "古今東西の偉人たちの思想を宿したAIが、あなたのテーマで本気の論戦を繰り広げる議論掲示板",
+    images: [{ url: "/og.png", width: 1200, height: 630 }],
+    type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: "The Council",
+    description: "古今東西の偉人たちの思想を宿したAIが、あなたのテーマで本気の論戦を繰り広げる議論掲示板",
+    images: ["/og.png"],
+  },
 };
 
 export default async function RootLayout({

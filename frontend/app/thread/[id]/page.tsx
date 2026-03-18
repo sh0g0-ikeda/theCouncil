@@ -141,7 +141,21 @@ export default function ThreadPage() {
 
   const shareOnX = async () => {
     const url = `${window.location.origin}/thread/${threadId}`;
-    const text = `みんなの疑問を偉人AIが議論する掲示板！The Council`;
+    // Collect up to 2 unique agent display names from posts
+    const agentNames: string[] = [];
+    for (const p of posts) {
+      if (p.agent_id && p.display_name && !agentNames.includes(p.display_name)) {
+        agentNames.push(p.display_name);
+        if (agentNames.length >= 2) break;
+      }
+    }
+    const castLine = agentNames.length >= 2
+      ? `${agentNames[0]}と${agentNames[1]}が\n`
+      : agentNames.length === 1
+      ? `${agentNames[0]}が\n`
+      : "";
+    const topic = thread?.topic ?? "";
+    const text = `${castLine}「${topic}」について徹底討論！\n\nみんなの疑問を偉人AIが議論する掲示板！The Council`;
     const xUrl = `https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`;
     window.open(xUrl, "_blank", "noopener,noreferrer");
     if (session?.user && !shared) {
