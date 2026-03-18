@@ -26,6 +26,14 @@ export default function ThreadPage() {
   const [error, setError] = useState("");
   const [sending, setSending] = useState(false);
   const [shared, setShared] = useState(false);
+  const [quota, setQuota] = useState<{ remaining: number | null; limit: number | null } | null>(null);
+
+  useEffect(() => {
+    if (!session?.user) return;
+    apiFetch<{ remaining: number | null; limit: number | null }>("/api/threads/quota", {}, session.user)
+      .then(setQuota)
+      .catch(() => {});
+  }, [session, shared]);
   const bottomRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const activeRef = useRef(true);
@@ -179,7 +187,16 @@ export default function ThreadPage() {
             <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 fill-current" aria-hidden="true">
               <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.746l7.73-8.835L1.254 2.25H8.08l4.258 5.63 5.906-5.63Zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
             </svg>
-            {shared ? "共有済み ✓" : "Xで共有するとスレッド作成回数+5！"}
+            {shared ? "共有済み ✓" : (
+              <>
+                Xで共有するとスレッド作成回数+5！
+                {quota && (
+                  <span className="ml-1 opacity-70">
+                    （今月残り{quota.remaining === null ? "∞" : quota.remaining}本）
+                  </span>
+                )}
+              </>
+            )}
           </button>
         </div>
       </section>
