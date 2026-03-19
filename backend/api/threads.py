@@ -138,7 +138,6 @@ async def get_votes(
     request: Request,
     thread_id: str,
     db: DatabaseClient = Depends(get_db),
-    user: RequestUser | None = Depends(lambda: None),
 ) -> dict[str, Any]:
     thread = await db.fetch_thread(thread_id)
     if not thread or thread.get("deleted_at"):
