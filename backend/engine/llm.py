@@ -753,6 +753,26 @@ async def generate_debate_script(
         "- 「成果」を誰がどの指標で測るのか\n"
         "これらをdiscussion_topicsに含め、台本内で順番に詰めさせよ。\n"
         "\n"
+        "【証拠の論証機能指定（必須）】\n"
+        "directiveで歴史的事例・数字を使う場合、必ず「この例がXを証明し、turn〇のYという主張を崩す」という接続を明記せよ。\n"
+        "  ✗ 失格: 「ソ連の崩壊を使え」\n"
+        "  ✓ 合格: 「ソ連の農業集産化（1932〜33年のホロドモール・餓死者数百万）を使い、"
+        "turn2の『強い指導力が生産性を上げる』という前提を崩せ。測定装置が権力に汚染された体制では"
+        "失敗が"失敗"と認識されず政策修正が不可能であることを示せ」\n"
+        "\n"
+        "【争点圧縮・決着形成アルゴリズム（必須）】\n"
+        "第4段以降に「圧縮ターン」を最低1回設計せよ。圧縮ターンのdirectiveには以下を含めよ:\n"
+        "- それまでの議論で相手が答えられなかった問いを2〜3個列挙する\n"
+        "- そのうち最も致命的な1問を「これに答えられなければ負けだ」として相手に突きつける\n"
+        "- 相手が逃げた定義・崩された前提を証拠として参照する\n"
+        "第5段の最終ターンは必ず「決裂確認か残存争点の明示」で終わらせよ。\n"
+        "  例: 「〜という問いに相手は20レス一度も答えなかった。つまりこの議論の本質は〜であることが確定した」\n"
+        "\n"
+        "【同陣営差別化の役割分担（必須）】\n"
+        "同陣営に複数いる場合、それぞれに異なる「武器ドメイン」を割り当て、directiveで一貫させよ:\n"
+        "  武器ドメイン例: 歴史的制度論 / 経済指標・数字 / 哲学・定義論 / 制度設計論 / 倫理・規範論 / 現場論・実態論\n"
+        "同じドメインを2人に割り当てることは禁止。ドメインをJSONの各turnにimplicit_domain（省略可）として記録せよ。\n"
+        "\n"
         "【その他ルール】\n"
         "- 同じエージェントが連続しないこと\n"
         "- reply_to_turn: 反論時は必ず相手のturn番号を指定（議論が噛み合うこと）\n"
@@ -761,7 +781,7 @@ async def generate_debate_script(
         "\n"
         'JSONのみ出力: {"proposition": "...", "discussion_topics": ["論点1", ...], "turns": ['
         '{"turn": 0, "agent_id": "...", "assigned_side": "support|oppose|neutral", "phase": 1, '
-        '"move_type": "opening_statement|counter_definition|attack|steelman_and_break|concretize|reframe|new_evidence|expose_contradiction|condition_squeeze|definition_rewrite|synthesize", '
+        '"move_type": "opening_statement|counter_definition|attack|steelman_and_break|concretize|reframe|new_evidence|expose_contradiction|condition_squeeze|definition_rewrite|compression|final_verdict", '
         '"directive": "攻撃型：〜｜...", "reply_to_turn": null, "target_claim": null}]}'
     )
     user_msg = (

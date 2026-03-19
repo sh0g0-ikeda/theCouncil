@@ -604,7 +604,7 @@ async def run_discussion(
                 script_turn_index += 1
                 turn_fail_counts.pop(script_turn_index - 1, None)  # clean up on success
 
-            await asyncio.sleep(0.3)
+            await asyncio.sleep(2.0)
 
     except Exception:
         logger.exception("run_discussion crashed for thread=%s", thread_id)
