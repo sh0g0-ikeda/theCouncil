@@ -86,6 +86,15 @@ CREATE TABLE thread_shares (
   PRIMARY KEY (user_id, thread_id)
 );
 
+-- One vote per user per thread; agent_id = who they thought was sharpest
+CREATE TABLE thread_votes (
+  thread_id UUID NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  agent_id VARCHAR NOT NULL REFERENCES agents(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (thread_id, user_id)
+);
+
 CREATE INDEX chunks_tags_idx ON chunks USING gin(tags);
 CREATE INDEX chunks_fts_idx ON chunks USING gin(to_tsvector('simple', text));
 CREATE INDEX posts_thread_created_idx ON posts(thread_id, created_at);

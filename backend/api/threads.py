@@ -128,6 +128,62 @@ async def share_thread(
     return {"granted": granted, "bonus": 5 if granted else 0}
 
 
+class VoteRequest(BaseModel):
+    agent_id: str
+
+
+@router.get("/{thread_id}/votes")
+@limiter.limit("60/minute")
+async def get_votes(
+    request: Request,
+    thread_id: str,
+    db: DatabaseClient = Depends(get_db),
+    user: RequestUser | None = Depends(lambda: None),
+) -> dict[str, Any]:
+    thread = await db.fetch_thread(thread_id)
+    if not thread or thread.get("deleted_at"):
+        raise HTTPException(status_code=404, detail="Thread not found")
+    counts = await db.fetch_thread_votes(thread_id)
+    return {"counts": counts, "my_vote": None}
+
+
+@router.get("/{thread_id}/votes/me")
+@limiter.limit("60/minute")
+async def get_my_vote(
+    request: Request,
+    thread_id: str,
+    user: RequestUser = Depends(require_user),
+    db: DatabaseClient = Depends(get_db),
+) -> dict[str, Any]:
+    thread = await db.fetch_thread(thread_id)
+    if not thread or thread.get("deleted_at"):
+        raise HTTPException(status_code=404, detail="Thread not found")
+    internal_id = await db.ensure_user_from_request(user.id, user.email)
+    my_vote = await db.fetch_user_thread_vote(thread_id, internal_id)
+    counts = await db.fetch_thread_votes(thread_id)
+    return {"counts": counts, "my_vote": my_vote}
+
+
+@router.post("/{thread_id}/votes")
+@limiter.limit("20/minute")
+async def cast_vote(
+    request: Request,
+    thread_id: str,
+    req: VoteRequest,
+    user: RequestUser = Depends(require_user),
+    db: DatabaseClient = Depends(get_db),
+) -> dict[str, Any]:
+    thread = await db.fetch_thread(thread_id)
+    if not thread or thread.get("deleted_at"):
+        raise HTTPException(status_code=404, detail="Thread not found")
+    if req.agent_id not in (thread.get("agent_ids") or []):
+        raise HTTPException(status_code=400, detail="このスレッドに参加していない人格です")
+    internal_id = await db.ensure_user_from_request(user.id, user.email)
+    await db.upsert_thread_vote(thread_id, internal_id, req.agent_id)
+    counts = await db.fetch_thread_votes(thread_id)
+    return {"counts": counts, "my_vote": req.agent_id}
+
+
 @router.get("/{thread_id}")
 @limiter.limit("90/minute")
 async def get_thread(

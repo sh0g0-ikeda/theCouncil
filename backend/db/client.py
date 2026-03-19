@@ -323,6 +323,37 @@ class DatabaseClient:
         async with pool.acquire() as conn:
             await conn.execute("UPDATE threads SET current_phase = $2 WHERE id = $1", thread_id, phase)
 
+    async def fetch_thread_votes(self, thread_id: str) -> dict[str, Any]:
+        """Return {counts: {agent_id: int}, my_vote: None} — caller adds my_vote."""
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT agent_id, COUNT(*) AS cnt FROM thread_votes WHERE thread_id = $1 GROUP BY agent_id",
+                thread_id,
+            )
+        return {str(row["agent_id"]): int(row["cnt"]) for row in rows}
+
+    async def fetch_user_thread_vote(self, thread_id: str, user_id: str) -> str | None:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            val = await conn.fetchval(
+                "SELECT agent_id FROM thread_votes WHERE thread_id = $1 AND user_id = $2",
+                thread_id, user_id,
+            )
+        return str(val) if val else None
+
+    async def upsert_thread_vote(self, thread_id: str, user_id: str, agent_id: str) -> None:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                INSERT INTO thread_votes (thread_id, user_id, agent_id)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (thread_id, user_id) DO UPDATE SET agent_id = EXCLUDED.agent_id, created_at = NOW()
+                """,
+                thread_id, user_id, agent_id,
+            )
+
     async def update_thread_speed(self, thread_id: str, mode: str) -> None:
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:

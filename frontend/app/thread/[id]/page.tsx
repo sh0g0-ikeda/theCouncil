@@ -35,6 +35,8 @@ export default function ThreadPage() {
   const [shared, setShared] = useState(false);
   const [quota, setQuota] = useState<{ remaining: number | null; limit: number | null } | null>(null);
   const [telopIndex, setTelopIndex] = useState(0);
+  const [votes, setVotes] = useState<Record<string, number>>({});
+  const [myVote, setMyVote] = useState<string | null>(null);
 
   useEffect(() => {
     if (!session?.user) return;
@@ -44,6 +46,7 @@ export default function ThreadPage() {
   }, [session, shared]);
   const aiPostCount = posts.filter((p) => p.agent_id).length;
   const showTelop = aiPostCount === 0 && thread?.state === "running";
+  const showVotes = aiPostCount >= 3;
 
   useEffect(() => {
     if (!showTelop) return;
@@ -52,6 +55,48 @@ export default function ThreadPage() {
     }, 8000);
     return () => clearInterval(id);
   }, [showTelop]);
+
+  // Load votes (counts public, my_vote requires auth)
+  useEffect(() => {
+    apiFetch<{ counts: Record<string, number>; my_vote: string | null }>(
+      `/api/threads/${threadId}/votes`
+    ).then((r) => setVotes(r.counts)).catch(() => {});
+  }, [threadId]);
+
+  useEffect(() => {
+    if (!session?.user) return;
+    apiFetch<{ counts: Record<string, number>; my_vote: string | null }>(
+      `/api/threads/${threadId}/votes/me`,
+      {},
+      session.user
+    ).then((r) => { setVotes(r.counts); setMyVote(r.my_vote); }).catch(() => {});
+  }, [threadId, session]);
+
+  const castVote = async (agentId: string) => {
+    if (!session?.user) { await signIn(); return; }
+    const prev = { ...votes };
+    const prevMy = myVote;
+    // optimistic update
+    setMyVote(agentId);
+    setVotes((v) => {
+      const next = { ...v };
+      if (prevMy && prevMy !== agentId) next[prevMy] = Math.max(0, (next[prevMy] ?? 1) - 1);
+      if (!prevMy || prevMy !== agentId) next[agentId] = (next[agentId] ?? 0) + 1;
+      return next;
+    });
+    try {
+      const r = await apiFetch<{ counts: Record<string, number>; my_vote: string | null }>(
+        `/api/threads/${threadId}/votes`,
+        { method: "POST", body: JSON.stringify({ agent_id: agentId }) },
+        session.user
+      );
+      setVotes(r.counts);
+      setMyVote(r.my_vote);
+    } catch {
+      setVotes(prev);
+      setMyVote(prevMy);
+    }
+  };
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -242,6 +287,49 @@ export default function ThreadPage() {
       )}
 
       <PostList posts={posts} />
+
+      {/* Vote panel — who was the sharpest? */}
+      {showVotes && (() => {
+        const agents = Array.from(
+          new Map(
+            posts
+              .filter((p) => p.agent_id)
+              .map((p) => [p.agent_id!, { id: p.agent_id!, name: p.display_name ?? p.agent_id! }])
+          ).values()
+        ).sort((a, b) => (votes[b.id] ?? 0) - (votes[a.id] ?? 0));
+        return (
+          <div className="rounded-2xl border border-board-border bg-board-paper p-4 shadow-board">
+            <p className="mb-3 text-xs font-semibold text-board-muted tracking-wide">
+              誰が一番キレてた？
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {agents.map((agent, i) => {
+                const count = votes[agent.id] ?? 0;
+                const isVoted = myVote === agent.id;
+                const isTop = i === 0 && count > 0;
+                return (
+                  <button
+                    key={agent.id}
+                    type="button"
+                    onClick={() => castVote(agent.id)}
+                    className={[
+                      "flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition",
+                      isVoted
+                        ? "border-board-accent bg-board-accent text-white"
+                        : "border-board-border bg-white text-board-ink hover:border-board-accent hover:text-board-accent",
+                    ].join(" ")}
+                  >
+                    {isTop && <span>👑</span>}
+                    <span>{agent.name}</span>
+                    <span className="opacity-70">♡</span>
+                    <span>{count}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Ad placeholder */}
       <div className="flex h-16 items-center justify-center rounded-2xl border border-dashed border-board-border bg-board-paper/50 text-xs text-board-muted">
