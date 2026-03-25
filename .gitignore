@@ -1,4 +1,6 @@
 .pytest_cache/
+.test_deps/
+pytest-cache-files-*/
 __pycache__/
 *.py[cod]
 .venv/
@@ -10,4 +12,3 @@ node_modules/
 dist/
 coverage/
 *.log
-

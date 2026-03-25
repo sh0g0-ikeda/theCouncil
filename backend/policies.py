@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 PLAN_MAX_POSTS = {
-    "free": 20,
-    "pro": 40,
-    "ultra": 40,
+    "free": 50,
+    "pro": 100,
+    "ultra": 200,
 }
 
 PLAN_MAX_AGENTS = {

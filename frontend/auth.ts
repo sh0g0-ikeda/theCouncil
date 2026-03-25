@@ -1,22 +1,9 @@
 import NextAuth from "next-auth";
 import TwitterProvider from "next-auth/providers/twitter";
 
+import { extractHandleFromProfile, isConfiguredAdmin } from "@/lib/admin-identities";
 import { createBackendToken } from "@/lib/backend-token";
 import { syncAppUser } from "@/lib/app-user";
-
-const adminEmails = new Set(
-  (process.env.ADMIN_EMAILS ?? "")
-    .split(",")
-    .map((value) => value.trim().toLowerCase())
-    .filter(Boolean)
-);
-
-const adminHandles = new Set(
-  (process.env.ADMIN_X_HANDLES ?? "")
-    .split(",")
-    .map((value) => value.trim().toLowerCase().replace(/^@/, ""))
-    .filter(Boolean)
-);
 
 const providers: any[] = [];
 
@@ -39,14 +26,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   callbacks: {
     async jwt({ token, user, profile }) {
       if (user) {
-        const handle = (
-          (profile as any)?.data?.username ??
-          (profile as any)?.screen_name ??
-          ""
-        ).toLowerCase();
-        const isAdmin =
-          adminEmails.has((user.email ?? "").toLowerCase()) ||
-          adminHandles.has(handle);
+        const handle = extractHandleFromProfile(profile);
+        const isAdmin = isConfiguredAdmin({
+          email: user.email ?? null,
+          handle
+        });
         token.role = isAdmin ? "admin" : "user";
       }
       return token;
@@ -71,15 +55,21 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     }
   },
   events: {
-    async signIn({ user }) {
+    async signIn(message: any) {
+      const { user, profile } = message;
       if (!user.id) {
         return;
       }
       try {
         await syncAppUser({
-          id: user.id,
+          xId: user.id,
           email: user.email ?? null,
-          role: adminEmails.has((user.email ?? "").toLowerCase()) ? "admin" : "user"  // role re-evaluated in jwt callback
+          role: isConfiguredAdmin({
+            email: user.email ?? null,
+            handle: extractHandleFromProfile(profile)
+          })
+            ? "admin"
+            : "user"
         });
       } catch {
         // non-fatal

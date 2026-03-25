@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
@@ -12,13 +12,20 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
 from auth import AuthError, verify_backend_token
+from api.access import require_thread_access
 from api.admin import router as admin_router
 from api.agents import router as agents_router
 from api.posts import router as posts_router
 from api.threads import router as threads_router
+from api.deps import RequestUser
 from db.client import get_db
 from environment import is_production_environment
-from engine.discussion import agents, load_agents, start_discussion
+from engine.discussion import (
+    load_disk_agents,
+    refresh_runtime_agents,
+    replace_runtime_agents,
+    start_discussion,
+)
 from rate_limit import limiter
 from realtime import connection_manager
 
@@ -85,12 +92,41 @@ async def _ws_keepalive(websocket: WebSocket, interval: int = 25) -> None:
         pass
 
 
+def _build_ws_user(websocket: WebSocket) -> RequestUser | None:
+    authorization = websocket.headers.get("authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() == "bearer" and token:
+        payload = verify_backend_token(token)
+        return RequestUser(
+            id=str(payload["sub"]),
+            email=payload.get("email"),
+            role=str(payload.get("role", "user")),
+        )
+    token = websocket.query_params.get("token")
+    if token:
+        payload = verify_backend_token(token)
+        return RequestUser(
+            id=str(payload["sub"]),
+            email=payload.get("email"),
+            role=str(payload.get("role", "user")),
+        )
+    return None
+
+
 @app.websocket("/ws/{thread_id}")
 async def ws_endpoint(websocket: WebSocket, thread_id: str) -> None:
-    # Reject subscriptions to private or deleted threads before accepting
-    thread = await get_db().fetch_thread(thread_id)
-    if not thread or thread.get("deleted_at") or thread.get("visibility") != "public":
+    try:
+        user = _build_ws_user(websocket)
+        await require_thread_access(thread_id, get_db(), user)
+    except AuthError:
+        await websocket.close(code=4401)
+        return
+    except HTTPException:
         await websocket.close(code=4003)
+        return
+    except Exception:
+        logger.warning("failed to authorize websocket thread=%s", thread_id, exc_info=True)
+        await websocket.close(code=1011)
         return
     await connection_manager.connect(thread_id, websocket)
     keepalive = asyncio.create_task(_ws_keepalive(websocket))
@@ -111,11 +147,13 @@ async def startup() -> None:
     if is_production_environment() and os.getenv("ALLOW_INSECURE_DEV_AUTH") == "1":
         raise RuntimeError("ALLOW_INSECURE_DEV_AUTH must not be enabled in production")
     await get_db().connect()
-    load_agents()
+    disk_agents = load_disk_agents()
     try:
-        await get_db().sync_agents_from_disk([a.persona for a in agents.values()])
+        await get_db().sync_agents_from_disk(disk_agents)
+        await refresh_runtime_agents(get_db())
     except Exception:
         logger.warning("agent DB sync failed at startup", exc_info=True)
+        replace_runtime_agents(disk_agents)
     # Resume any discussions that were running when the server last stopped
     try:
         running_ids = await get_db().list_running_thread_ids()

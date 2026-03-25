@@ -3,9 +3,10 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from api.deps import RequestUser, require_user
+from api.access import require_thread_access
+from api.deps import RequestUser, optional_user, require_user
 from db.client import DatabaseClient, get_db
-from engine.discussion import agents, start_discussion
+from engine.discussion import start_discussion
 from engine.llm import generate_topic_tags, moderate_text
 from policies import clamp_max_posts, max_agents, monthly_thread_limit
 from rate_limit import limiter
@@ -18,7 +19,7 @@ class CreateThreadRequest(BaseModel):
     topic: str = Field(min_length=3, max_length=500)
     agent_ids: list[str]
     visibility: str = "public"
-    max_posts: int = Field(default=20, ge=10, le=40)
+    max_posts: int = Field(default=20, ge=10, le=200)
 
 
 class SpeedRequest(BaseModel):
@@ -39,7 +40,10 @@ async def create_thread(
     if req.visibility not in {"public", "private"}:
         raise HTTPException(status_code=400, detail="Invalid visibility")
 
-    invalid_ids = [agent_id for agent_id in agent_ids if agent_id not in agents]
+    enabled_agent_ids = set(await db.list_enabled_agent_ids())
+    if not enabled_agent_ids:
+        raise HTTPException(status_code=503, detail="No enabled agents available")
+    invalid_ids = [agent_id for agent_id in agent_ids if agent_id not in enabled_agent_ids]
     if invalid_ids:
         raise HTTPException(status_code=400, detail="無効な人格IDが含まれています")
 
@@ -120,11 +124,9 @@ async def share_thread(
     user: RequestUser = Depends(require_user),
     db: DatabaseClient = Depends(get_db),
 ) -> dict[str, Any]:
-    thread = await db.fetch_thread(thread_id)
-    if not thread or thread.get("deleted_at"):
-        raise HTTPException(status_code=404, detail="Thread not found")
+    access = await require_thread_access(thread_id, db, user)
     internal_id = await db.ensure_user_from_request(user.id, user.email)
-    granted = await db.record_thread_share(internal_id, thread_id)
+    granted = await db.record_thread_share(internal_id, access.thread["id"])
     return {"granted": granted, "bonus": 5 if granted else 0}
 
 
@@ -137,11 +139,10 @@ class VoteRequest(BaseModel):
 async def get_votes(
     request: Request,
     thread_id: str,
+    user: RequestUser | None = Depends(optional_user),
     db: DatabaseClient = Depends(get_db),
 ) -> dict[str, Any]:
-    thread = await db.fetch_thread(thread_id)
-    if not thread or thread.get("deleted_at"):
-        raise HTTPException(status_code=404, detail="Thread not found")
+    await require_thread_access(thread_id, db, user)
     counts = await db.fetch_thread_votes(thread_id)
     return {"counts": counts, "my_vote": None}
 
@@ -154,10 +155,8 @@ async def get_my_vote(
     user: RequestUser = Depends(require_user),
     db: DatabaseClient = Depends(get_db),
 ) -> dict[str, Any]:
-    thread = await db.fetch_thread(thread_id)
-    if not thread or thread.get("deleted_at"):
-        raise HTTPException(status_code=404, detail="Thread not found")
-    internal_id = await db.ensure_user_from_request(user.id, user.email)
+    access = await require_thread_access(thread_id, db, user)
+    internal_id = access.actor.internal_user_id or await db.ensure_user_from_request(user.id, user.email)
     my_vote = await db.fetch_user_thread_vote(thread_id, internal_id)
     counts = await db.fetch_thread_votes(thread_id)
     return {"counts": counts, "my_vote": my_vote}
@@ -172,12 +171,10 @@ async def cast_vote(
     user: RequestUser = Depends(require_user),
     db: DatabaseClient = Depends(get_db),
 ) -> dict[str, Any]:
-    thread = await db.fetch_thread(thread_id)
-    if not thread or thread.get("deleted_at"):
-        raise HTTPException(status_code=404, detail="Thread not found")
-    if req.agent_id not in (thread.get("agent_ids") or []):
+    access = await require_thread_access(thread_id, db, user)
+    if req.agent_id not in (access.thread.get("agent_ids") or []):
         raise HTTPException(status_code=400, detail="このスレッドに参加していない人格です")
-    internal_id = await db.ensure_user_from_request(user.id, user.email)
+    internal_id = access.actor.internal_user_id or await db.ensure_user_from_request(user.id, user.email)
     await db.upsert_thread_vote(thread_id, internal_id, req.agent_id)
     counts = await db.fetch_thread_votes(thread_id)
     return {"counts": counts, "my_vote": req.agent_id}
@@ -188,12 +185,11 @@ async def cast_vote(
 async def get_thread(
     request: Request,
     thread_id: str,
+    user: RequestUser | None = Depends(optional_user),
     db: DatabaseClient = Depends(get_db),
 ) -> dict[str, Any]:
-    thread = await db.fetch_thread(thread_id)
-    if not thread or thread.get("deleted_at"):
-        raise HTTPException(status_code=404, detail="Thread not found")
-    return thread
+    access = await require_thread_access(thread_id, db, user)
+    return access.thread
 
 
 @router.get("/{thread_id}/posts")
@@ -201,8 +197,10 @@ async def get_thread(
 async def get_posts(
     request: Request,
     thread_id: str,
+    user: RequestUser | None = Depends(optional_user),
     db: DatabaseClient = Depends(get_db),
 ) -> list[dict[str, Any]]:
+    await require_thread_access(thread_id, db, user)
     return await db.fetch_posts(thread_id)
 
 
@@ -218,11 +216,9 @@ async def set_speed(
     if req.mode not in {"slow", "normal", "fast", "instant", "paused"}:
         raise HTTPException(status_code=400, detail="Invalid mode")
 
-    thread = await db.fetch_thread(thread_id)
-    if not thread:
-        raise HTTPException(status_code=404, detail="Thread not found")
-    internal_id = await db.ensure_user_from_request(user.id, user.email)
-    if thread.get("user_id") != internal_id:
+    access = await require_thread_access(thread_id, db, user)
+    internal_id = access.actor.internal_user_id or await db.ensure_user_from_request(user.id, user.email)
+    if access.thread.get("user_id") != internal_id:
         raise HTTPException(status_code=403, detail="Thread owner only")
 
     await db.update_thread_speed(thread_id, req.mode)

@@ -25,6 +25,7 @@ function mergePost(current: PostRecord[], incoming: PostRecord) {
 export default function ThreadPage() {
   const params = useParams<{ id: string }>();
   const { data: session } = useSession();
+  const threadId = useMemo(() => params.id, [params.id]);
   const [thread, setThread] = useState<ThreadSummary | null>(null);
   const isOwner = !!session?.user?.id && !!thread?.owner_x_id && session.user.id === thread.owner_x_id;
   const PHASE_LABELS: Record<number, string> = { 1: "定義", 2: "対立", 3: "深化", 4: "転換", 5: "収束" };
@@ -59,9 +60,11 @@ export default function ThreadPage() {
   // Load votes (counts public, my_vote requires auth)
   useEffect(() => {
     apiFetch<{ counts: Record<string, number>; my_vote: string | null }>(
-      `/api/threads/${threadId}/votes`
+      `/api/threads/${threadId}/votes`,
+      {},
+      session?.user
     ).then((r) => setVotes(r.counts)).catch(() => {});
-  }, [threadId]);
+  }, [threadId, session?.user]);
 
   useEffect(() => {
     if (!session?.user) return;
@@ -102,15 +105,14 @@ export default function ThreadPage() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const activeRef = useRef(true);
   const atBottomRef = useRef(true);
-  const threadId = useMemo(() => params.id, [params.id]);
 
   useEffect(() => {
     let active = true;
     const load = async () => {
       try {
         const [nextThread, nextPosts] = await Promise.all([
-          apiFetch<ThreadSummary>(`/api/threads/${threadId}`),
-          apiFetch<PostRecord[]>(`/api/threads/${threadId}/posts`)
+          apiFetch<ThreadSummary>(`/api/threads/${threadId}`, {}, session?.user),
+          apiFetch<PostRecord[]>(`/api/threads/${threadId}/posts`, {}, session?.user)
         ]);
         if (!active) {
           return;
@@ -131,13 +133,13 @@ export default function ThreadPage() {
     pollRef.current = setInterval(async () => {
       if (!active) return;
       try {
-        const np = await apiFetch<PostRecord[]>(`/api/threads/${threadId}/posts`);
+        const np = await apiFetch<PostRecord[]>(`/api/threads/${threadId}/posts`, {}, session?.user);
         if (active) setPosts(np);
       } catch {}
     }, 2000);
 
     // WebSocket as bonus (instant delivery when it works)
-    const socket = createThreadSocket(threadId);
+    const socket = createThreadSocket(threadId, session?.user?.backendToken);
     socket.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
@@ -156,7 +158,7 @@ export default function ThreadPage() {
         pollRef.current = null;
       }
     };
-  }, [threadId]);
+  }, [threadId, session?.user]);
 
   useEffect(() => {
     const onScroll = () => {

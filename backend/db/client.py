@@ -22,6 +22,22 @@ def _row_to_dict(row: Any | None) -> dict[str, Any] | None:
     return data
 
 
+_VECTOR_KEYS = [
+    "state_control",
+    "tech_optimism",
+    "rationalism",
+    "power_realism",
+    "individualism",
+    "moral_universalism",
+    "future_orientation",
+]
+
+
+def _persona_to_vector(persona: dict[str, Any]) -> list[int]:
+    ideology = persona.get("ideology_vector", {})
+    return [int(ideology.get(key, 0)) for key in _VECTOR_KEYS]
+
+
 class DatabaseClient:
     def __init__(self, dsn: str) -> None:
         self._dsn = dsn
@@ -47,7 +63,23 @@ class DatabaseClient:
     async def fetch_user(self, user_id: str) -> dict[str, Any] | None:
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
-            row = await conn.fetchrow("SELECT * FROM users WHERE id = $1", user_id)
+            row = await conn.fetchrow("SELECT * FROM users WHERE id::text = $1", user_id)
+        return _row_to_dict(row)
+
+    async def fetch_user_by_x_id(self, x_id: str) -> dict[str, Any] | None:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM users WHERE x_id = $1", x_id)
+        return _row_to_dict(row)
+
+    async def resolve_request_user(self, subject: str, email: str | None) -> dict[str, Any] | None:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM users WHERE id::text = $1", subject)
+            if row is None:
+                row = await conn.fetchrow("SELECT * FROM users WHERE x_id = $1", subject)
+            if row is None and email:
+                row = await conn.fetchrow("SELECT * FROM users WHERE email = $1", email)
         return _row_to_dict(row)
 
     async def fetch_user_normalized(self, user_id: str) -> dict[str, Any] | None:
@@ -57,9 +89,19 @@ class DatabaseClient:
             return await self._normalize_thread_quota(conn, user_id)
 
     async def ensure_user_from_request(self, x_id: str, email: str | None) -> str:
-        """Upsert user by x_id (Twitter ID), return internal UUID."""
+        """Resolve a request subject to an internal UUID, creating by x_id if needed."""
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
+            existing = await conn.fetchrow("SELECT id FROM users WHERE id::text = $1", x_id)
+            if existing is not None:
+                if email:
+                    await conn.execute("UPDATE users SET email = COALESCE($2, email) WHERE id::text = $1", x_id, email)
+                return str(existing["id"])
+            existing = await conn.fetchrow("SELECT id FROM users WHERE x_id = $1", x_id)
+            if existing is not None:
+                if email:
+                    await conn.execute("UPDATE users SET email = COALESCE($2, email) WHERE id = $1", existing["id"], email)
+                return str(existing["id"])
             row = await conn.fetchrow(
                 """
                 INSERT INTO users (x_id, email)
@@ -158,8 +200,8 @@ class DatabaseClient:
                 t.*,
                 COALESCE(COUNT(p.id), 0)::int AS post_count
             FROM threads t
-            LEFT JOIN posts p ON p.thread_id = t.id AND p.deleted_at IS NULL
-            WHERE t.visibility = 'public' AND t.deleted_at IS NULL
+            LEFT JOIN posts p ON p.thread_id = t.id AND p.deleted_at IS NULL AND p.hidden_at IS NULL
+            WHERE t.visibility = 'public' AND t.deleted_at IS NULL AND t.hidden_at IS NULL
             GROUP BY t.id
             ORDER BY {order_clause}
             LIMIT $1
@@ -179,7 +221,7 @@ class DatabaseClient:
                     COALESCE(COUNT(p.id), 0)::int AS post_count,
                     u.x_id AS owner_x_id
                 FROM threads t
-                LEFT JOIN posts p ON p.thread_id = t.id AND p.deleted_at IS NULL
+                LEFT JOIN posts p ON p.thread_id = t.id AND p.deleted_at IS NULL AND p.hidden_at IS NULL
                 LEFT JOIN users u ON u.id = t.user_id
                 WHERE t.id = $1
                 GROUP BY t.id, u.x_id
@@ -218,7 +260,7 @@ class DatabaseClient:
                     a.label
                 FROM posts p
                 LEFT JOIN agents a ON a.id = p.agent_id
-                WHERE p.thread_id = $1 AND p.deleted_at IS NULL
+                WHERE p.thread_id = $1 AND p.deleted_at IS NULL AND p.hidden_at IS NULL
                 ORDER BY p.id ASC
                 """,
                 thread_id,
@@ -555,29 +597,32 @@ class DatabaseClient:
             )
         return [_row_to_dict(row) or {} for row in rows]
 
+    async def list_enabled_agent_ids(self) -> list[str]:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT id FROM agents WHERE enabled = TRUE")
+        return [str(row["id"]) for row in rows]
+
+    async def fetch_agent(self, agent_id: str) -> dict[str, Any] | None:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM agents WHERE id = $1", agent_id)
+        return _row_to_dict(row)
+
     async def sync_agents_from_disk(self, agents_data: list[dict[str, Any]]) -> None:
-        """Upsert agents from persona.json files; disable agents removed from disk."""
-        _VECTOR_KEYS = [
-            "state_control", "tech_optimism", "rationalism", "power_realism",
-            "individualism", "moral_universalism", "future_orientation",
-        ]
+        """Seed missing agents from disk; keep DB edits authoritative for existing rows."""
         pool = await self._ensure_pool()
         disk_ids = {agent["id"] for agent in agents_data}
         async with pool.acquire() as conn:
             for agent in agents_data:
                 persona_str = json.dumps(agent, ensure_ascii=False)
-                iv = agent.get("ideology_vector", {})
-                vector = [iv.get(k, 0) for k in _VECTOR_KEYS]
+                vector = _persona_to_vector(agent)
                 await conn.execute(
                     """
                     INSERT INTO agents (id, display_name, label, persona_json, vector, enabled)
                     VALUES ($1, $2, $3, $4::jsonb, $5::integer[], TRUE)
                     ON CONFLICT (id) DO UPDATE
-                        SET display_name = EXCLUDED.display_name,
-                            label = EXCLUDED.label,
-                            persona_json = EXCLUDED.persona_json,
-                            vector = EXCLUDED.vector,
-                            updated_at = NOW()
+                        SET updated_at = NOW()
                     """,
                     agent["id"],
                     agent["display_name"],
@@ -635,6 +680,9 @@ class DatabaseClient:
             assignments.append(f"persona_json = ${idx}::jsonb")
             assignments.append(f"display_name = (${idx}::jsonb ->> 'display_name')")
             assignments.append(f"label = (${idx}::jsonb ->> 'label')")
+            vector_idx = len(args) + 1
+            args.append(_persona_to_vector(persona_json))
+            assignments.append(f"vector = ${vector_idx}::integer[]")
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
             result = await conn.execute(

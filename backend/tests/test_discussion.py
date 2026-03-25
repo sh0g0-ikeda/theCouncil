@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import random
 
 from engine.debate_state import DebateState
+import engine.discussion as discussion_module
 from engine.discussion import (
     _classify_user_intervention,
     _build_conversation_summary,
@@ -13,6 +15,7 @@ from engine.discussion import (
     _select_debate_function,
     _sanitize_topic_axes,
     _should_facilitate,
+    start_discussion,
 )
 from models.agent import Agent, IdeologyVector
 
@@ -197,3 +200,27 @@ def test_select_debate_function_respects_directive_and_constraint() -> None:
 
     assert rebut == "attack"
     assert tradeoff == "concretize"
+
+
+def test_start_discussion_cleans_up_finished_task() -> None:
+    original_run_discussion = discussion_module.run_discussion
+    discussion_module._discussion_tasks.clear()
+
+    async def fake_run_discussion(_thread_id: str, _push_fn) -> None:
+        return None
+
+    async def fake_push(_thread_id: str, _payload: dict[str, object]) -> None:
+        return None
+
+    async def run() -> None:
+        discussion_module.run_discussion = fake_run_discussion
+        try:
+            await start_discussion("thread-1", fake_push)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            assert "thread-1" not in discussion_module._discussion_tasks
+        finally:
+            discussion_module.run_discussion = original_run_discussion
+            discussion_module._discussion_tasks.clear()
+
+    asyncio.run(run())

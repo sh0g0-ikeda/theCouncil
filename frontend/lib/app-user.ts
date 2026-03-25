@@ -1,7 +1,7 @@
 import { getSupabaseAdminClient } from "@/lib/supabase";
 
 type SyncUserInput = {
-  id: string;
+  xId: string;
   email: string | null;
   role: "user" | "admin";
 };
@@ -14,13 +14,12 @@ export async function syncAppUser(input: SyncUserInput) {
 
   await (supabase.from("users") as any).upsert(
     {
-      id: input.id,
+      x_id: input.xId,
       email: input.email,
       role: input.role
     },
     {
-      onConflict: "id"
+      onConflict: "x_id"
     }
   );
 }
-
