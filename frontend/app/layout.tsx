@@ -9,6 +9,7 @@ import { HeaderAuth } from "@/components/HeaderAuth";
 import "./globals.css";
 
 export const metadata: Metadata = {
+  metadataBase: new URL(process.env.NEXTAUTH_URL ?? "http://localhost:3000"),
   title: "The Council",
   description: "古今東西の偉人たちの思想を宿したAIが、あなたのテーマで本気の論戦を繰り広げる議論掲示板",
   openGraph: {

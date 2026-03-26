@@ -1,4 +1,4 @@
-import { sessionHeaders, type SessionUser } from "@/lib/session";
+import { sessionHeaders, type SessionUser } from "@/lib/session-user";
 
 export type AgentSummary = {
   id: string;
@@ -26,6 +26,11 @@ export type ThreadSummary = {
   post_count?: number;
   owner_x_id?: string;
   current_phase?: number;
+  report_count?: number;
+  pending_report_count?: number;
+  hidden_at?: string | null;
+  locked_at?: string | null;
+  deleted_at?: string | null;
 };
 
 export type PostRecord = {
@@ -39,6 +44,9 @@ export type PostRecord = {
   focus_axis?: string | null;
   is_facilitator: boolean;
   created_at: string;
+  report_count?: number;
+  pending_report_count?: number;
+  thread_id?: string;
 };
 
 export function getApiBaseUrl() {

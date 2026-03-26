@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from api.access import ensure_thread_writable, require_thread_access
+from api.report_contracts import CreateReportRequest
 from api.deps import RequestUser, require_user
 from db.client import DatabaseClient, get_db
 from engine.discussion import start_discussion
@@ -57,3 +58,27 @@ async def create_post(
             await connection_manager.broadcast(tid, p)
         await start_discussion(thread_id, push)
     return post
+
+
+@router.post("/{thread_id}/posts/{post_id}/reports")
+@limiter.limit("20/minute")
+async def create_post_report(
+    request: Request,
+    thread_id: str,
+    post_id: int,
+    req: CreateReportRequest,
+    user: RequestUser = Depends(require_user),
+    db: DatabaseClient = Depends(get_db),
+) -> dict[str, Any]:
+    access = await require_thread_access(thread_id, db, user)
+    post = await db.fetch_post(thread_id, post_id)
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    internal_id = access.actor.internal_user_id or await db.ensure_user_from_request(user.id, user.email)
+    report = await db.create_report(
+        thread_id=access.thread["id"],
+        post_id=post_id,
+        reporter_id=internal_id,
+        reason=req.reason,
+    )
+    return {"ok": True, **report}

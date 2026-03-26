@@ -60,6 +60,12 @@ class DatabaseClient:
         assert self._pool is not None
         return self._pool
 
+    async def ping(self) -> bool:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            value = await conn.fetchval("SELECT 1")
+        return value == 1
+
     async def fetch_user(self, user_id: str) -> dict[str, Any] | None:
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
@@ -102,6 +108,21 @@ class DatabaseClient:
                 if email:
                     await conn.execute("UPDATE users SET email = COALESCE($2, email) WHERE id = $1", existing["id"], email)
                 return str(existing["id"])
+            if email:
+                existing = await conn.fetchrow("SELECT id FROM users WHERE email = $1", email)
+                if existing is not None:
+                    await conn.execute(
+                        """
+                        UPDATE users
+                        SET x_id = COALESCE(x_id, $2),
+                            email = COALESCE($1, email)
+                        WHERE id = $3
+                        """,
+                        email,
+                        x_id,
+                        existing["id"],
+                    )
+                    return str(existing["id"])
             row = await conn.fetchrow(
                 """
                 INSERT INTO users (x_id, email)
@@ -267,6 +288,26 @@ class DatabaseClient:
             )
         return [_row_to_dict(row) or {} for row in rows]
 
+    async def fetch_post(self, thread_id: str, post_id: int) -> dict[str, Any] | None:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT
+                    p.*,
+                    a.display_name,
+                    a.label
+                FROM posts p
+                LEFT JOIN agents a ON a.id = p.agent_id
+                WHERE p.thread_id = $1
+                  AND p.id = $2
+                  AND p.deleted_at IS NULL
+                """,
+                thread_id,
+                post_id,
+            )
+        return _row_to_dict(row)
+
     async def save_post(
         self,
         thread_id: str,
@@ -328,6 +369,59 @@ class DatabaseClient:
                     user_id,
                 )
         return True
+
+    async def create_report(
+        self,
+        *,
+        thread_id: str,
+        reporter_id: str,
+        reason: str,
+        post_id: int | None = None,
+    ) -> dict[str, Any]:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                existing = await conn.fetchrow(
+                    """
+                    SELECT id, status
+                    FROM reports
+                    WHERE thread_id = $1
+                      AND reporter_id = $2
+                      AND (
+                        ($3::int IS NULL AND post_id IS NULL)
+                        OR post_id = $3
+                      )
+                      AND status = 'pending'
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    thread_id,
+                    reporter_id,
+                    post_id,
+                )
+                if existing is not None:
+                    return {
+                        "id": int(existing["id"]),
+                        "duplicate": True,
+                        "status": str(existing["status"]),
+                    }
+
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO reports (thread_id, post_id, reporter_id, reason)
+                    VALUES ($1, $2, $3, $4)
+                    RETURNING id, status
+                    """,
+                    thread_id,
+                    post_id,
+                    reporter_id,
+                    reason,
+                )
+        return {
+            "id": int(row["id"]),
+            "duplicate": False,
+            "status": str(row["status"]),
+        }
 
     async def has_shared_thread(self, user_id: str, thread_id: str) -> bool:
         pool = await self._ensure_pool()
@@ -429,7 +523,17 @@ class DatabaseClient:
                     t.*,
                     u.email AS owner_email,
                     u.x_id AS owner_x_id,
-                    COALESCE(COUNT(p.id), 0)::int AS post_count
+                    COALESCE(COUNT(p.id), 0)::int AS post_count,
+                    (
+                        SELECT COUNT(*)::int
+                        FROM reports r
+                        WHERE r.thread_id = t.id AND r.post_id IS NULL
+                    ) AS report_count,
+                    (
+                        SELECT COUNT(*)::int
+                        FROM reports r
+                        WHERE r.thread_id = t.id AND r.post_id IS NULL AND r.status = 'pending'
+                    ) AS pending_report_count
                 FROM threads t
                 LEFT JOIN users u ON u.id = t.user_id
                 LEFT JOIN posts p ON p.thread_id = t.id AND p.deleted_at IS NULL
@@ -468,7 +572,17 @@ class DatabaseClient:
                     p.*,
                     a.display_name,
                     a.label,
-                    t.topic
+                    t.topic,
+                    (
+                        SELECT COUNT(*)::int
+                        FROM reports r
+                        WHERE r.thread_id = p.thread_id AND r.post_id = p.id
+                    ) AS report_count,
+                    (
+                        SELECT COUNT(*)::int
+                        FROM reports r
+                        WHERE r.thread_id = p.thread_id AND r.post_id = p.id AND r.status = 'pending'
+                    ) AS pending_report_count
                 FROM posts p
                 LEFT JOIN agents a ON a.id = p.agent_id
                 LEFT JOIN threads t ON t.id = p.thread_id
@@ -515,10 +629,17 @@ class DatabaseClient:
         async with pool.acquire() as conn:
             rows = await conn.fetch(
                 """
-                SELECT r.*, p.content AS post_content, t.topic
+                SELECT
+                    r.*,
+                    p.content AS post_content,
+                    t.topic,
+                    reporter.email AS reporter_email,
+                    reporter.x_id AS reporter_x_id,
+                    CASE WHEN r.post_id IS NULL THEN 'thread' ELSE 'post' END AS target_type
                 FROM reports r
                 LEFT JOIN posts p ON p.thread_id = r.thread_id AND p.id = r.post_id
                 LEFT JOIN threads t ON t.id = r.thread_id
+                LEFT JOIN users reporter ON reporter.id = r.reporter_id
                 ORDER BY r.created_at DESC
                 LIMIT 200
                 """
@@ -540,6 +661,38 @@ class DatabaseClient:
                         "UPDATE posts SET deleted_at = NOW() WHERE thread_id = $1 AND id = $2",
                         row["thread_id"],
                         row["post_id"],
+                    )
+                    result = await conn.execute(
+                        "UPDATE reports SET status = 'resolved' WHERE id = $1",
+                        report_id,
+                    )
+                    return not result.endswith(" 0")
+                if action == "hide_thread":
+                    row = await conn.fetchrow(
+                        "SELECT thread_id FROM reports WHERE id = $1",
+                        report_id,
+                    )
+                    if row is None or row["thread_id"] is None:
+                        return False
+                    await conn.execute(
+                        "UPDATE threads SET hidden_at = NOW() WHERE id = $1",
+                        row["thread_id"],
+                    )
+                    result = await conn.execute(
+                        "UPDATE reports SET status = 'resolved' WHERE id = $1",
+                        report_id,
+                    )
+                    return not result.endswith(" 0")
+                if action == "delete_thread":
+                    row = await conn.fetchrow(
+                        "SELECT thread_id FROM reports WHERE id = $1",
+                        report_id,
+                    )
+                    if row is None or row["thread_id"] is None:
+                        return False
+                    await conn.execute(
+                        "UPDATE threads SET deleted_at = NOW() WHERE id = $1",
+                        row["thread_id"],
                     )
                     result = await conn.execute(
                         "UPDATE reports SET status = 'resolved' WHERE id = $1",

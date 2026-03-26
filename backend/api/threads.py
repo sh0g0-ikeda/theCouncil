@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from api.access import require_thread_access
+from api.report_contracts import CreateReportRequest
 from api.deps import RequestUser, optional_user, require_user
 from db.client import DatabaseClient, get_db
 from engine.discussion import start_discussion
@@ -128,6 +129,26 @@ async def share_thread(
     internal_id = await db.ensure_user_from_request(user.id, user.email)
     granted = await db.record_thread_share(internal_id, access.thread["id"])
     return {"granted": granted, "bonus": 5 if granted else 0}
+
+
+@router.post("/{thread_id}/reports")
+@limiter.limit("20/minute")
+async def create_thread_report(
+    request: Request,
+    thread_id: str,
+    req: CreateReportRequest,
+    user: RequestUser = Depends(require_user),
+    db: DatabaseClient = Depends(get_db),
+) -> dict[str, Any]:
+    access = await require_thread_access(thread_id, db, user)
+    internal_id = access.actor.internal_user_id or await db.ensure_user_from_request(user.id, user.email)
+    report = await db.create_report(
+        thread_id=access.thread["id"],
+        reporter_id=internal_id,
+        reason=req.reason,
+        post_id=None,
+    )
+    return {"ok": True, **report}
 
 
 class VoteRequest(BaseModel):

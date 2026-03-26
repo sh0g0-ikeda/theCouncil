@@ -25,6 +25,15 @@ CREATE TABLE users (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE email_login_tokens (
+  email VARCHAR NOT NULL,
+  token_hash VARCHAR NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (email, token_hash)
+);
+
 CREATE TABLE threads (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES users(id),
@@ -97,7 +106,7 @@ CREATE TABLE thread_votes (
 
 CREATE INDEX chunks_tags_idx ON chunks USING gin(tags);
 CREATE INDEX chunks_fts_idx ON chunks USING gin(to_tsvector('simple', text));
+CREATE INDEX email_login_tokens_expires_idx ON email_login_tokens(expires_at);
 CREATE INDEX posts_thread_created_idx ON posts(thread_id, created_at);
 CREATE INDEX threads_state_created_idx ON threads(state, created_at DESC);
 CREATE INDEX reports_status_created_idx ON reports(status, created_at DESC);
-

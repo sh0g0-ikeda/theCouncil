@@ -21,7 +21,7 @@ class PostActionRequest(BaseModel):
 
 
 class ReportActionRequest(BaseModel):
-    action: str = Field(pattern="^(resolved|dismissed|delete_post)$")
+    action: str = Field(pattern="^(resolved|dismissed|delete_post|hide_thread|delete_thread)$")
 
 
 class UserActionRequest(BaseModel):

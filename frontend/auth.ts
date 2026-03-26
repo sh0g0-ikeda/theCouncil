@@ -1,17 +1,40 @@
 import NextAuth from "next-auth";
+import CredentialsProvider from "next-auth/providers/credentials";
 import TwitterProvider from "next-auth/providers/twitter";
 
 import { extractHandleFromProfile, isConfiguredAdmin } from "@/lib/admin-identities";
+import { resolveAuthSubject } from "@/lib/auth-subject";
 import { createBackendToken } from "@/lib/backend-token";
+import { isEmailAuthConfiguredFromEnv } from "@/lib/email-auth-config";
+import { consumeEmailLoginCode } from "@/lib/email-auth";
 import { syncAppUser } from "@/lib/app-user";
 
 const providers: any[] = [];
 
 if (process.env.TWITTER_CLIENT_ID && process.env.TWITTER_CLIENT_SECRET) {
+    providers.push(
+        TwitterProvider({
+            clientId: process.env.TWITTER_CLIENT_ID,
+            clientSecret: process.env.TWITTER_CLIENT_SECRET
+        })
+    );
+}
+
+if (isEmailAuthConfiguredFromEnv()) {
   providers.push(
-    TwitterProvider({
-      clientId: process.env.TWITTER_CLIENT_ID,
-      clientSecret: process.env.TWITTER_CLIENT_SECRET
+    CredentialsProvider({
+      id: "email-code",
+      name: "Email code",
+      credentials: {
+        email: { label: "Email", type: "email" },
+        code: { label: "Code", type: "text" }
+      },
+      async authorize(credentials) {
+        if (!credentials?.email || !credentials?.code) {
+          return null;
+        }
+        return consumeEmailLoginCode(String(credentials.email), String(credentials.code));
+      }
     })
   );
 }
@@ -19,6 +42,9 @@ if (process.env.TWITTER_CLIENT_ID && process.env.TWITTER_CLIENT_SECRET) {
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers,
+  pages: {
+    signIn: "/login"
+  },
   session: {
     strategy: "jwt"
   },
@@ -27,6 +53,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     async jwt({ token, user, profile }) {
       if (user) {
         const handle = extractHandleFromProfile(profile);
+        token.sub = resolveAuthSubject({
+          userId: user.id ?? null,
+          email: user.email ?? null
+        });
         const isAdmin = isConfiguredAdmin({
           email: user.email ?? null,
           handle
@@ -57,12 +87,16 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   events: {
     async signIn(message: any) {
       const { user, profile } = message;
-      if (!user.id) {
+      const subject = resolveAuthSubject({
+        userId: user.id ?? null,
+        email: user.email ?? null
+      });
+      if (!subject) {
         return;
       }
       try {
         await syncAppUser({
-          xId: user.id,
+          xId: subject,
           email: user.email ?? null,
           role: isConfiguredAdmin({
             email: user.email ?? null,
