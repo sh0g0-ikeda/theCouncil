@@ -1,9 +1,15 @@
+import "server-only";
+
 import { createHash, randomInt } from "node:crypto";
 
-import nodemailer from "nodemailer";
-
 import { isEmailAuthConfiguredFromEnv } from "@/lib/email-auth-config";
-import { getSupabaseAdminClient } from "@/lib/supabase";
+import {
+  loadActiveEmailToken,
+  purgeEmailTokens,
+  storeEmailToken,
+  updateAttemptCount,
+} from "@/lib/email-auth-store";
+import { sendEmailLoginCode } from "@/lib/email-auth-mailer";
 
 const EMAIL_CODE_TTL_MS = 15 * 60 * 1000;
 const EMAIL_REQUEST_COOLDOWN_MS = 60 * 1000;
@@ -31,84 +37,8 @@ function hashCode(email: string, code: string) {
     .digest("hex");
 }
 
-function getEmailTransport() {
-  if (!process.env.EMAIL_SERVER || !process.env.EMAIL_FROM) {
-    throw new Error("Email transport is not configured");
-  }
-  return nodemailer.createTransport(process.env.EMAIL_SERVER);
-}
-
-function getSupabase() {
-  const supabase = getSupabaseAdminClient();
-  if (!supabase) {
-    throw new Error("Supabase admin client is not configured");
-  }
-  return supabase;
-}
-
-type EmailLoginTokenRow = {
-  email: string;
-  token_hash: string;
-  expires_at: string;
-  created_at: string;
-  attempt_count: number;
-};
-
-function getEmailAuthStoreError() {
-  return new Error("Email login store is not ready. Run the latest database schema.");
-}
-
 export function isEmailAuthConfigured() {
   return isEmailAuthConfiguredFromEnv();
-}
-
-async function loadActiveEmailToken(email: string): Promise<EmailLoginTokenRow | null> {
-  const supabase = getSupabase();
-  const nowIso = new Date().toISOString();
-  const { data, error } = await (supabase.from("email_login_tokens") as any)
-    .select("email, token_hash, expires_at, created_at, attempt_count")
-    .eq("email", email)
-    .gt("expires_at", nowIso)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (error && error.code !== "PGRST116") {
-    throw getEmailAuthStoreError();
-  }
-  return (data as EmailLoginTokenRow | null) ?? null;
-}
-
-async function purgeEmailTokens(email: string) {
-  const supabase = getSupabase();
-  const { error } = await (supabase.from("email_login_tokens") as any).delete().eq("email", email);
-  if (error) {
-    throw getEmailAuthStoreError();
-  }
-}
-
-async function storeEmailToken(email: string, code: string) {
-  const supabase = getSupabase();
-  const expiresAt = new Date(Date.now() + EMAIL_CODE_TTL_MS).toISOString();
-  const { error } = await (supabase.from("email_login_tokens") as any).insert({
-    email,
-    token_hash: hashCode(email, code),
-    expires_at: expiresAt,
-    attempt_count: 0
-  });
-  if (error) {
-    throw getEmailAuthStoreError();
-  }
-}
-
-async function updateAttemptCount(email: string, tokenHash: string, attemptCount: number) {
-  const supabase = getSupabase();
-  const { error } = await (supabase.from("email_login_tokens") as any)
-    .update({ attempt_count: attemptCount })
-    .eq("email", email)
-    .eq("token_hash", tokenHash);
-  if (error) {
-    throw getEmailAuthStoreError();
-  }
 }
 
 export async function requestEmailLoginCode(emailInput: string) {
@@ -129,21 +59,8 @@ export async function requestEmailLoginCode(emailInput: string) {
   await purgeEmailTokens(email);
 
   const code = String(randomInt(0, 1000000)).padStart(6, "0");
-  await storeEmailToken(email, code);
-
-  const transport = getEmailTransport();
-  await transport.sendMail({
-    from: process.env.EMAIL_FROM,
-    to: email,
-    subject: "The Council sign-in code",
-    text: [
-      "Use this code to sign in to The Council:",
-      "",
-      code,
-      "",
-      "This code expires in 15 minutes."
-    ].join("\n")
-  });
+  await storeEmailToken(email, hashCode(email, code), new Date(Date.now() + EMAIL_CODE_TTL_MS).toISOString());
+  await sendEmailLoginCode({ email, code });
 }
 
 export async function consumeEmailLoginCode(emailInput: string, codeInput: string) {

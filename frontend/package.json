@@ -12,7 +12,7 @@
     "jose": "^6.0.13",
     "next": "^15.0.0",
     "next-auth": "beta",
-    "nodemailer": "^6.10.1",
+    "nodemailer": "^7.0.7",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
@@ -24,6 +24,6 @@
     "autoprefixer": "^10.4.21",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.17",
-    "typescript": "^5.8.3"
+    "typescript": "5.9.3"
   }
 }

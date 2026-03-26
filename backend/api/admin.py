@@ -5,9 +5,8 @@ from pydantic import BaseModel, Field
 
 from api.deps import RequestUser, require_admin
 from db.client import DatabaseClient, get_db
-from engine.discussion import refresh_runtime_agent
-from engine.rag import clear_chunk_cache
 from rate_limit import limiter
+from services.agent_admin import update_agent_settings
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -165,10 +164,13 @@ async def update_agent(
     _: RequestUser = Depends(require_admin),
     db: DatabaseClient = Depends(get_db),
 ) -> dict[str, bool]:
-    ok = await db.admin_update_agent(agent_id, req.enabled, req.persona_json)
+    ok = await update_agent_settings(
+        db,
+        agent_id,
+        enabled=req.enabled,
+        persona_json=req.persona_json,
+        refresh_rag=req.refresh_rag,
+    )
     if not ok:
         raise HTTPException(status_code=404, detail="Agent not found")
-    await refresh_runtime_agent(agent_id, db)
-    if req.refresh_rag:
-        clear_chunk_cache(agent_id)
     return {"ok": True}

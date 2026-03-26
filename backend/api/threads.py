@@ -4,14 +4,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from api.access import require_thread_access
-from api.report_contracts import CreateReportRequest
 from api.deps import RequestUser, optional_user, require_user
+from api.report_contracts import CreateReportRequest
 from db.client import DatabaseClient, get_db
 from engine.discussion import start_discussion
 from engine.llm import generate_topic_tags, moderate_text
 from policies import clamp_max_posts, max_agents, monthly_thread_limit
 from rate_limit import limiter
 from realtime import connection_manager
+from services.reporting import submit_thread_report
+from services.request_users import resolve_internal_user_id
 
 router = APIRouter(prefix="/api/threads", tags=["threads"])
 
@@ -27,6 +29,10 @@ class SpeedRequest(BaseModel):
     mode: str
 
 
+class VoteRequest(BaseModel):
+    agent_id: str
+
+
 @router.post("/")
 @limiter.limit("10/minute")
 async def create_thread(
@@ -36,28 +42,35 @@ async def create_thread(
     db: DatabaseClient = Depends(get_db),
 ) -> dict[str, Any]:
     agent_ids = list(dict.fromkeys(req.agent_ids))
-    if not (2 <= len(agent_ids)):
-        raise HTTPException(status_code=400, detail="参加人格は2体以上です")
+    if len(agent_ids) < 2:
+        raise HTTPException(status_code=400, detail="At least 2 agents are required")
     if req.visibility not in {"public", "private"}:
         raise HTTPException(status_code=400, detail="Invalid visibility")
 
     enabled_agent_ids = set(await db.list_enabled_agent_ids())
     if not enabled_agent_ids:
         raise HTTPException(status_code=503, detail="No enabled agents available")
+
     invalid_ids = [agent_id for agent_id in agent_ids if agent_id not in enabled_agent_ids]
     if invalid_ids:
-        raise HTTPException(status_code=400, detail="無効な人格IDが含まれています")
+        raise HTTPException(status_code=400, detail="One or more agent IDs are invalid")
 
     if await moderate_text(req.topic):
-        raise HTTPException(status_code=422, detail="テーマがモデレーションにより拒否されました")
+        raise HTTPException(status_code=422, detail="Topic failed moderation")
 
-    internal_id = await db.ensure_user_from_request(user.id, user.email)
+    internal_id = await resolve_internal_user_id(db, user)
     account = await db.fetch_user(internal_id)
     if not account:
         raise HTTPException(status_code=401, detail="User record was not provisioned")
+
     plan = account.get("plan", "free")
-    if len(agent_ids) > max_agents(plan):
-        raise HTTPException(status_code=400, detail=f"このプランで選択できる人格は最大{max_agents(plan)}体です")
+    allowed_agents = max_agents(plan)
+    if len(agent_ids) > allowed_agents:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Your plan allows up to {allowed_agents} agents",
+        )
+
     max_posts = clamp_max_posts(plan, req.max_posts)
     try:
         topic_tags = await generate_topic_tags(req.topic)
@@ -72,9 +85,12 @@ async def create_thread(
     except ValueError as exc:
         if str(exc) == "free_plan_limit":
             limit = monthly_thread_limit(plan)
-            raise HTTPException(status_code=403, detail=f"月間スレッド作成数の上限（{limit}本）に達しました") from exc
+            raise HTTPException(
+                status_code=403,
+                detail=f"Monthly thread limit reached ({limit})",
+            ) from exc
         if str(exc) == "user_banned":
-            raise HTTPException(status_code=403, detail="BANされたユーザーです") from exc
+            raise HTTPException(status_code=403, detail="This account is banned") from exc
         raise
 
     async def push(thread_id: str, post: dict[str, Any]) -> None:
@@ -91,10 +107,11 @@ async def get_quota(
     user: RequestUser = Depends(require_user),
     db: DatabaseClient = Depends(get_db),
 ) -> dict[str, Any]:
-    internal_id = await db.ensure_user_from_request(user.id, user.email)
+    internal_id = await resolve_internal_user_id(db, user)
     account = await db.fetch_user_normalized(internal_id)
     if not account:
         raise HTTPException(status_code=401, detail="User record was not provisioned")
+
     plan = account.get("plan", "free")
     used = account.get("monthly_thread_count", 0)
     limit = monthly_thread_limit(plan)
@@ -126,7 +143,7 @@ async def share_thread(
     db: DatabaseClient = Depends(get_db),
 ) -> dict[str, Any]:
     access = await require_thread_access(thread_id, db, user)
-    internal_id = await db.ensure_user_from_request(user.id, user.email)
+    internal_id = await resolve_internal_user_id(db, user)
     granted = await db.record_thread_share(internal_id, access.thread["id"])
     return {"granted": granted, "bonus": 5 if granted else 0}
 
@@ -141,18 +158,14 @@ async def create_thread_report(
     db: DatabaseClient = Depends(get_db),
 ) -> dict[str, Any]:
     access = await require_thread_access(thread_id, db, user)
-    internal_id = access.actor.internal_user_id or await db.ensure_user_from_request(user.id, user.email)
-    report = await db.create_report(
-        thread_id=access.thread["id"],
-        reporter_id=internal_id,
+    report = await submit_thread_report(
+        db=db,
+        thread=access.thread,
+        user=user,
+        actor_internal_user_id=access.actor.internal_user_id,
         reason=req.reason,
-        post_id=None,
     )
     return {"ok": True, **report}
-
-
-class VoteRequest(BaseModel):
-    agent_id: str
 
 
 @router.get("/{thread_id}/votes")
@@ -177,7 +190,11 @@ async def get_my_vote(
     db: DatabaseClient = Depends(get_db),
 ) -> dict[str, Any]:
     access = await require_thread_access(thread_id, db, user)
-    internal_id = access.actor.internal_user_id or await db.ensure_user_from_request(user.id, user.email)
+    internal_id = await resolve_internal_user_id(
+        db,
+        user,
+        preferred_internal_user_id=access.actor.internal_user_id,
+    )
     my_vote = await db.fetch_user_thread_vote(thread_id, internal_id)
     counts = await db.fetch_thread_votes(thread_id)
     return {"counts": counts, "my_vote": my_vote}
@@ -194,8 +211,13 @@ async def cast_vote(
 ) -> dict[str, Any]:
     access = await require_thread_access(thread_id, db, user)
     if req.agent_id not in (access.thread.get("agent_ids") or []):
-        raise HTTPException(status_code=400, detail="このスレッドに参加していない人格です")
-    internal_id = access.actor.internal_user_id or await db.ensure_user_from_request(user.id, user.email)
+        raise HTTPException(status_code=400, detail="Agent is not a participant in this thread")
+
+    internal_id = await resolve_internal_user_id(
+        db,
+        user,
+        preferred_internal_user_id=access.actor.internal_user_id,
+    )
     await db.upsert_thread_vote(thread_id, internal_id, req.agent_id)
     counts = await db.fetch_thread_votes(thread_id)
     return {"counts": counts, "my_vote": req.agent_id}
@@ -238,7 +260,11 @@ async def set_speed(
         raise HTTPException(status_code=400, detail="Invalid mode")
 
     access = await require_thread_access(thread_id, db, user)
-    internal_id = access.actor.internal_user_id or await db.ensure_user_from_request(user.id, user.email)
+    internal_id = await resolve_internal_user_id(
+        db,
+        user,
+        preferred_internal_user_id=access.actor.internal_user_id,
+    )
     if access.thread.get("user_id") != internal_id:
         raise HTTPException(status_code=403, detail="Thread owner only")
 
