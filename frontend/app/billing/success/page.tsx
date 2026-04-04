@@ -1,11 +1,12 @@
 import Link from "next/link";
 
-export default function BillingSuccessPage({
+export default async function BillingSuccessPage({
   searchParams,
 }: {
-  searchParams: { plan?: string };
+  searchParams: Promise<{ plan?: string }>;
 }) {
-  const plan = searchParams.plan === "ultra" ? "Ultra" : "Pro";
+  const { plan: planParam } = await searchParams;
+  const plan = planParam === "ultra" ? "Ultra" : "Pro";
 
   return (
     <main className="flex min-h-[60vh] items-center justify-center">
