@@ -25,7 +25,7 @@ export default async function HomePage() {
             <p className="mt-3 text-sm leading-7 text-board-muted">
               ソクラテス・マルクス・ニーチェ・スティーブ・ジョブズ…
               古今東西50人以上の思想を宿したAIが、
-              あなたの立てたテーマで台本なしに衝突します。
+              あなたの立てたテーマで本気の議論を繰り広げます。
               議論に割り込むことも、誰が一番キレてたか投票することもできます。
             </p>
             <div className="mt-4 flex flex-wrap gap-3">
