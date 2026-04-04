@@ -75,6 +75,15 @@ class UserRepositoryMixin:
             )
         return str(row["id"])
 
+    async def increment_private_thread_count(self, conn: Any, user_id: str) -> dict[str, Any]:
+        row = await conn.fetchrow(
+            "UPDATE users SET monthly_private_thread_count = monthly_private_thread_count + 1 WHERE id = $1 RETURNING *",
+            user_id,
+        )
+        if row is None:
+            raise ValueError("user_not_found")
+        return row_to_dict(row) or {}
+
     async def update_user_plan(self, user_id: str, plan: str) -> None:
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:

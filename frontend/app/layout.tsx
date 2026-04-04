@@ -62,6 +62,12 @@ export default async function RootLayout({
                     スレ作成
                   </Link>
                   <Link
+                    href="/persona-request"
+                    className="rounded border border-board-border bg-board-paper px-3 py-1 text-xs font-semibold text-board-ink hover:bg-white"
+                  >
+                    人格リクエスト
+                  </Link>
+                  <Link
                     href="/pricing"
                     className="rounded border border-board-accent/60 bg-board-paper px-3 py-1 text-xs font-semibold text-board-accent hover:bg-emerald-50"
                   >

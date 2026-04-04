@@ -18,6 +18,7 @@ from api.agents import router as agents_router
 from api.posts import router as posts_router
 from api.system import router as system_router
 from api.billing import router as billing_router
+from api.persona_requests import router as persona_requests_router
 from api.threads import router as threads_router
 from api.deps import RequestUser
 from db.client import get_db
@@ -55,6 +56,7 @@ app.add_middleware(
     allow_headers=["Content-Type", "Authorization"],
 )
 app.include_router(billing_router)
+app.include_router(persona_requests_router)
 app.include_router(agents_router)
 app.include_router(threads_router)
 app.include_router(posts_router)

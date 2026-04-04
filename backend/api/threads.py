@@ -89,6 +89,18 @@ async def create_thread(
                 status_code=403,
                 detail=f"Monthly thread limit reached ({limit})",
             ) from exc
+        if str(exc) == "private_not_allowed":
+            raise HTTPException(
+                status_code=403,
+                detail="Private threads require Pro plan or higher",
+            ) from exc
+        if str(exc) == "private_plan_limit":
+            from policies import monthly_private_thread_limit
+            limit = monthly_private_thread_limit(plan)
+            raise HTTPException(
+                status_code=403,
+                detail=f"Monthly private thread limit reached ({limit})",
+            ) from exc
         if str(exc) == "user_banned":
             raise HTTPException(status_code=403, detail="This account is banned") from exc
         raise
@@ -96,7 +108,7 @@ async def create_thread(
     async def push(thread_id: str, post: dict[str, Any]) -> None:
         await connection_manager.broadcast(thread_id, post)
 
-    await start_discussion(thread["id"], push)
+    await start_discussion(thread["id"], push, plan=plan)
     return thread
 
 
@@ -115,11 +127,17 @@ async def get_quota(
     plan = account.get("plan", "free")
     used = account.get("monthly_thread_count", 0)
     limit = monthly_thread_limit(plan)
+    from policies import monthly_private_thread_limit
+    private_used = account.get("monthly_private_thread_count", 0)
+    private_limit = monthly_private_thread_limit(plan)
     return {
         "plan": plan,
         "used": used,
         "limit": limit,
         "remaining": None if limit is None else max(0, limit - used),
+        "private_used": private_used,
+        "private_limit": private_limit,
+        "private_remaining": None if private_limit is None else max(0, private_limit - private_used),
     }
 
 

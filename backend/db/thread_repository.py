@@ -24,9 +24,19 @@ class ThreadRepositoryMixin:
                     raise ValueError("user_banned")
                 from policies import monthly_thread_limit
 
-                _limit = monthly_thread_limit(user.get("plan", "free"))
+                plan = user.get("plan", "free")
+                _limit = monthly_thread_limit(plan)
                 if _limit is not None and user["monthly_thread_count"] >= _limit:
                     raise ValueError("free_plan_limit")
+
+                if visibility == "private":
+                    from policies import monthly_private_thread_limit
+                    _private_limit = monthly_private_thread_limit(plan)
+                    if _private_limit == 0:
+                        raise ValueError("private_not_allowed")
+                    private_used = user.get("monthly_private_thread_count", 0)
+                    if _private_limit is not None and private_used >= _private_limit:
+                        raise ValueError("private_plan_limit")
 
                 row = await conn.fetchrow(
                     """
@@ -45,6 +55,11 @@ class ThreadRepositoryMixin:
                     "UPDATE users SET monthly_thread_count = monthly_thread_count + 1 WHERE id = $1",
                     user_id,
                 )
+                if visibility == "private":
+                    await conn.execute(
+                        "UPDATE users SET monthly_private_thread_count = monthly_private_thread_count + 1 WHERE id = $1",
+                        user_id,
+                    )
                 await conn.execute(
                     """
                     DELETE FROM threads

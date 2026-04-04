@@ -298,3 +298,53 @@ class AdminRepositoryMixin:
                 *args,
             )
         return not result.endswith(" 0")
+
+    async def create_persona_request(
+        self,
+        requester_id: str | None,
+        person_name: str,
+        description: str,
+    ) -> dict[str, Any]:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO persona_requests (requester_id, person_name, description)
+                VALUES ($1, $2, $3)
+                RETURNING *
+                """,
+                requester_id,
+                person_name,
+                description,
+            )
+        return row_to_dict(row) or {}
+
+    async def list_persona_requests(self) -> list[dict[str, Any]]:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM persona_requests ORDER BY created_at DESC LIMIT 200"
+            )
+        return [row_to_dict(r) for r in rows]
+
+    async def update_persona_request(
+        self,
+        request_id: int,
+        status: str,
+        admin_note: str | None,
+    ) -> dict[str, Any] | None:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                UPDATE persona_requests
+                SET status = $2, admin_note = COALESCE($3, admin_note)
+                WHERE id = $1
+                RETURNING *
+                """,
+                request_id,
+                status,
+                admin_note,
+            )
+        return row_to_dict(row) if row else None
+

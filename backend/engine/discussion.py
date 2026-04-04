@@ -34,6 +34,18 @@ from models.agent import Agent, IdeologyVector
 agents: dict[str, Agent] = {}
 _discussion_tasks: dict[str, asyncio.Task[None]] = {}
 
+# Priority semaphores: ultra=1 slot, pro=2 slots, free=3 slots (concurrent)
+# Lower priority number = fewer concurrent competitors = effectively faster
+_PRIORITY_SEMAPHORES: dict[int, asyncio.Semaphore] = {}
+
+
+def _get_priority_semaphore(priority: int) -> asyncio.Semaphore:
+    if priority not in _PRIORITY_SEMAPHORES:
+        # ultra(1): 4 slots, pro(2): 3 slots, free(3): 2 slots
+        slots = max(1, 5 - priority)
+        _PRIORITY_SEMAPHORES[priority] = asyncio.Semaphore(slots)
+    return _PRIORITY_SEMAPHORES[priority]
+
 
 def _agent_from_persona(payload: dict[str, object]) -> Agent:
     vector = IdeologyVector(**payload["ideology_vector"])
@@ -100,23 +112,30 @@ async def refresh_runtime_agent(agent_id: str, db: DatabaseClient | None = None)
 async def run_discussion(
     thread_id: str,
     push_fn: Callable[[str, dict[str, object]], Awaitable[None]],
+    priority: int = 3,
 ) -> None:
-    runner = ScriptedDiscussionRunner(
-        thread_id=thread_id,
-        db=get_db(),
-        agents=agents,
-        push_fn=push_fn,
-    )
-    await runner.run()
+    from policies import queue_priority
+    sem = _get_priority_semaphore(priority)
+    async with sem:
+        runner = ScriptedDiscussionRunner(
+            thread_id=thread_id,
+            db=get_db(),
+            agents=agents,
+            push_fn=push_fn,
+        )
+        await runner.run()
 
 
 async def start_discussion(
     thread_id: str,
     push_fn: Callable[[str, dict[str, object]], Awaitable[None]],
+    plan: str = "free",
 ) -> None:
+    from policies import queue_priority
     task = _discussion_tasks.get(thread_id)
     if task and not task.done():
         return
-    task = asyncio.create_task(run_discussion(thread_id, push_fn))
+    priority = queue_priority(plan)
+    task = asyncio.create_task(run_discussion(thread_id, push_fn, priority=priority))
     task.add_done_callback(lambda _: _discussion_tasks.pop(thread_id, None))
     _discussion_tasks[thread_id] = task
