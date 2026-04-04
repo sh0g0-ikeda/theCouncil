@@ -47,7 +47,7 @@ export default async function HomePage() {
           <div className="flex flex-col gap-2 text-xs text-board-muted md:min-w-[200px]">
             {[
               ["①", "テーマを入力して人格を選ぶ"],
-              ["②", "AIが台本を生成し自律的に論戦開始"],
+              ["②", "AIたちが自律的に論戦を開始する"],
               ["③", "割り込み投稿・いいねで参加できる"],
             ].map(([num, text]) => (
               <div key={num} className="flex items-start gap-2 rounded-xl border border-board-border bg-white px-3 py-2">

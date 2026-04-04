@@ -303,25 +303,62 @@ async def generate_debate_script(
     topic: str,
     agent_list: list[dict[str, Any]],
     max_posts: int = 20,
+    debate_frame: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Generate a per-turn debate script using GPT-4o. Returns {} on failure."""
     if not _openai_enabled() or not agent_list:
         return {}
 
+    assignments = (debate_frame or {}).get("assignments", {})
+    frame_info = (debate_frame or {}).get("frame", {})
+
     agent_lines = []
     for agent in agent_list:
         wv = ", ".join(agent.get("worldview", [])[:3])
         nn = agent.get("speech_constraints", {}).get("non_negotiable", "")[:80]
-        agent_lines.append(
-            f'{agent["id"]}({agent["display_name"]}): 世界観={wv}. 絶対に譲れない立場={nn}'
-        )
+        combat = "; ".join(agent.get("combat_doctrine", [])[:2])
+        must_dist = agent.get("must_distinguish_from", {})
+        dist_note = "; ".join(f"{k}とは違い「{v[:40]}」" for k, v in list(must_dist.items())[:2])
+
+        assignment = assignments.get(agent["id"], {})
+        side = assignment.get("side", "")
+        thesis = assignment.get("thesis", "")
+        weapon_domain = assignment.get("camp_function", "")
+
+        line = f'{agent["id"]}({agent["display_name"]}): 世界観={wv}. 絶対に譲れない立場={nn}. 戦闘原則={combat}.'
+        if side:
+            line += f' 配役={side}.'
+        if thesis:
+            line += f' この議題でのテーゼ={thesis}.'
+        if weapon_domain:
+            line += f' 武器ドメイン={weapon_domain}.'
+        if dist_note:
+            line += f' 差別化={dist_note}.'
+        agent_lines.append(line)
 
     act3_start = max(3, max_posts // 3)
     act4_start = max(act3_start + 2, max_posts * 2 // 3)
     act5_start = max(act4_start + 2, max_posts * 85 // 100)
 
+    frame_block = ""
+    if frame_info:
+        proposition = frame_info.get("proposition", "")
+        support_label = frame_info.get("support_label", "")
+        oppose_label = frame_info.get("oppose_label", "")
+        support_thesis = frame_info.get("support_thesis", "")
+        oppose_thesis = frame_info.get("oppose_thesis", "")
+        frame_block = (
+            "\n【事前確定フレーム（必ず従え）】\n"
+            f"命題: {proposition}\n"
+            f"賛成側ラベル: {support_label} → テーゼ: {support_thesis}\n"
+            f"反対側ラベル: {oppose_label} → テーゼ: {oppose_thesis}\n"
+            "各エージェントの配役・テーゼは上記エージェント情報の「配役=」「テーゼ=」を厳守せよ。\n"
+            "この命題・テーゼから外れたdirectiveは失格。\n"
+        )
+
     system_msg = (
         "あなたは「哲学バトル漫画」の脚本家だ。以下を全て満たした台本を生成せよ。\n"
+        f"{frame_block}"
         "\n"
         "【絶対条件1：真の対立】\n"
         "最低1名を否定派（oppose）として配置せよ。議題の前提そのものを「そんなことはない・前提が間違っている」と否定する側。\n"

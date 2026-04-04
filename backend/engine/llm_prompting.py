@@ -355,6 +355,9 @@ def build_script_post_messages(
     worldview = ", ".join(persona.get("worldview", [])[:3])
     non_negotiable = persona.get("speech_constraints", {}).get("non_negotiable", "")
     tone = persona.get("speech_constraints", {}).get("tone", "")
+    combat = "; ".join(persona.get("combat_doctrine", [])[:2])
+    must_dist = persona.get("must_distinguish_from", {})
+    dist_note = "; ".join(f"{k}とは違い「{v[:50]}」" for k, v in list(must_dist.items())[:2])
 
     side_line = ""
     if assigned_side == "oppose":
@@ -367,6 +370,10 @@ def build_script_post_messages(
     persona_block = f"【{name}／{label}】\n世界観: {worldview}"
     if non_negotiable:
         persona_block += f"\n絶対に譲れない立場: {non_negotiable}"
+    if combat:
+        persona_block += f"\n戦闘原則（これがお前の切り口）: {combat}"
+    if dist_note:
+        persona_block += f"\n他キャラとの差別化（この切り口を守れ）: {dist_note}"
     if tone:
         persona_block += f"\n口調: {tone}"
     if side_line:
