@@ -3,16 +3,18 @@
 import { useState } from "react";
 import type { AgentSummary } from "@/lib/api";
 
-const CATEGORY_ORDER = ["全て", "哲学者", "政治家", "軍人", "経済学者", "科学者", "作家", "起業家"];
+const CATEGORY_ORDER = ["全て", "哲学者", "政治家", "軍人", "経済学者", "科学者", "技術者", "作家", "起業家", "投資家"];
 
 const CATEGORY_COLORS: Record<string, string> = {
-  哲学者: "bg-violet-100 text-violet-700 border-violet-200",
-  政治家: "bg-blue-100 text-blue-700 border-blue-200",
-  軍人:   "bg-red-100 text-red-700 border-red-200",
+  哲学者:   "bg-violet-100 text-violet-700 border-violet-200",
+  政治家:   "bg-blue-100 text-blue-700 border-blue-200",
+  軍人:     "bg-red-100 text-red-700 border-red-200",
   経済学者: "bg-amber-100 text-amber-700 border-amber-200",
-  科学者: "bg-emerald-100 text-emerald-700 border-emerald-200",
-  作家:   "bg-pink-100 text-pink-700 border-pink-200",
-  起業家: "bg-orange-100 text-orange-700 border-orange-200",
+  科学者:   "bg-emerald-100 text-emerald-700 border-emerald-200",
+  技術者:   "bg-cyan-100 text-cyan-700 border-cyan-200",
+  作家:     "bg-pink-100 text-pink-700 border-pink-200",
+  起業家:   "bg-orange-100 text-orange-700 border-orange-200",
+  投資家:   "bg-yellow-100 text-yellow-700 border-yellow-200",
 };
 
 function getCategories(agent: AgentSummary): string[] {

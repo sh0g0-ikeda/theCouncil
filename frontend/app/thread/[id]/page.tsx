@@ -313,6 +313,23 @@ export default function ThreadPage() {
         }
       />
 
+      {thread.state === "completed" && (
+        <div className="rounded-2xl border border-board-accent/30 bg-emerald-50 p-5">
+          <p className="mb-1 text-sm font-bold text-board-ink">議論が完結しました</p>
+          <p className="mb-4 text-xs text-board-muted">面白かったらXでシェアして、スレッド作成回数を+5獲得しよう</p>
+          <button
+            type="button"
+            onClick={shareOnX}
+            className="flex items-center gap-1.5 rounded-full bg-black px-4 py-2 text-xs font-semibold text-white transition hover:bg-zinc-700"
+          >
+            <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 fill-current" aria-hidden="true">
+              <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.746l7.73-8.835L1.254 2.25H8.08l4.258 5.63 5.906-5.63Zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+            </svg>
+            {shared ? "共有済み ✓" : "Xでシェアする"}
+          </button>
+        </div>
+      )}
+
       {showVotes
         ? (() => {
             const agents = Array.from(
