@@ -61,6 +61,12 @@ export default async function RootLayout({
                   >
                     スレ作成
                   </Link>
+                  <Link
+                    href="/pricing"
+                    className="rounded border border-board-accent/60 bg-board-paper px-3 py-1 text-xs font-semibold text-board-accent hover:bg-emerald-50"
+                  >
+                    プラン
+                  </Link>
                   <HeaderAuth />
                 </div>
               </div>

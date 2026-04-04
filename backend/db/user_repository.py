@@ -75,6 +75,24 @@ class UserRepositoryMixin:
             )
         return str(row["id"])
 
+    async def update_user_plan(self, user_id: str, plan: str) -> None:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET plan = $2 WHERE id::text = $1",
+                user_id,
+                plan,
+            )
+
+    async def update_user_stripe_customer(self, user_id: str, stripe_customer_id: str) -> None:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET stripe_customer_id = $2 WHERE id::text = $1",
+                user_id,
+                stripe_customer_id,
+            )
+
     async def _normalize_thread_quota(self, conn: Any, user_id: str) -> dict[str, Any]:
         current_month = date.today().replace(day=1)
         row = await conn.fetchrow(
