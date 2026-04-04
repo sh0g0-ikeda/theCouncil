@@ -9,7 +9,7 @@ from collections.abc import Awaitable, Callable
 
 from db.client import DatabaseClient
 from engine.discussion_policy import _get_phase
-from engine.llm import LLMGenerationError, assign_debate_frame, build_script_post_messages, call_llm, generate_debate_script
+from engine.llm import LLMGenerationError, build_script_post_messages, call_llm, generate_debate_script
 from engine.rag import retrieve_chunks
 from models.agent import Agent
 
@@ -111,10 +111,8 @@ class ScriptedDiscussionRunner:
             return True
 
         agent_list = [self.agents[aid].persona for aid in thread["agent_ids"] if aid in self.agents]
-        logger.info("Generating debate frame for thread=%s", self.thread_id)
-        debate_frame = await assign_debate_frame(thread["topic"], agent_list)
         logger.info("Generating debate script for thread=%s", self.thread_id)
-        generated = await generate_debate_script(thread["topic"], agent_list, thread["max_posts"], debate_frame=debate_frame)
+        generated = await generate_debate_script(thread["topic"], agent_list, thread["max_posts"])
         if generated.get("turns"):
             self.state.cached_script = generated
             await self.db.save_thread_script(self.thread_id, generated)

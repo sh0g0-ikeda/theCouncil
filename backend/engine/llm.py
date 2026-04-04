@@ -303,35 +303,25 @@ async def generate_debate_script(
     topic: str,
     agent_list: list[dict[str, Any]],
     max_posts: int = 20,
-    debate_frame: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Generate a per-turn debate script using GPT-4o. Returns {} on failure."""
     if not _openai_enabled() or not agent_list:
         return {}
 
-    assignments = (debate_frame or {}).get("assignments", {})
-    frame_info = (debate_frame or {}).get("frame", {})
-
     agent_lines = []
     for agent in agent_list:
         wv = ", ".join(agent.get("worldview", [])[:3])
-        nn = agent.get("speech_constraints", {}).get("non_negotiable", "")[:80]
+        nn = agent.get("speech_constraints", {}).get("non_negotiable", "")[:100]
         combat = "; ".join(agent.get("combat_doctrine", [])[:2])
         must_dist = agent.get("must_distinguish_from", {})
-        dist_note = "; ".join(f"{k}とは違い「{v[:40]}」" for k, v in list(must_dist.items())[:2])
+        dist_note = "; ".join(f"{k}とは違い「{v[:50]}」" for k, v in list(must_dist.items())[:2])
 
-        assignment = assignments.get(agent["id"], {})
-        side = assignment.get("side", "")
-        thesis = assignment.get("thesis", "")
-        weapon_domain = assignment.get("camp_function", "")
-
-        line = f'{agent["id"]}({agent["display_name"]}): 世界観={wv}. 絶対に譲れない立場={nn}. 戦闘原則={combat}.'
-        if side:
-            line += f' 配役={side}.'
-        if thesis:
-            line += f' この議題でのテーゼ={thesis}.'
-        if weapon_domain:
-            line += f' 武器ドメイン={weapon_domain}.'
+        line = (
+            f'{agent["id"]}({agent["display_name"]}): '
+            f'世界観={wv}. '
+            f'絶対に譲れない立場={nn}. '
+            f'戦闘原則={combat}.'
+        )
         if dist_note:
             line += f' 差別化={dist_note}.'
         agent_lines.append(line)
@@ -340,25 +330,18 @@ async def generate_debate_script(
     act4_start = max(act3_start + 2, max_posts * 2 // 3)
     act5_start = max(act4_start + 2, max_posts * 85 // 100)
 
-    frame_block = ""
-    if frame_info:
-        proposition = frame_info.get("proposition", "")
-        support_label = frame_info.get("support_label", "")
-        oppose_label = frame_info.get("oppose_label", "")
-        support_thesis = frame_info.get("support_thesis", "")
-        oppose_thesis = frame_info.get("oppose_thesis", "")
-        frame_block = (
-            "\n【事前確定フレーム（必ず従え）】\n"
-            f"命題: {proposition}\n"
-            f"賛成側ラベル: {support_label} → テーゼ: {support_thesis}\n"
-            f"反対側ラベル: {oppose_label} → テーゼ: {oppose_thesis}\n"
-            "各エージェントの配役・テーゼは上記エージェント情報の「配役=」「テーゼ=」を厳守せよ。\n"
-            "この命題・テーゼから外れたdirectiveは失格。\n"
-        )
-
     system_msg = (
         "あなたは「哲学バトル漫画」の脚本家だ。以下を全て満たした台本を生成せよ。\n"
-        f"{frame_block}"
+        "\n"
+        "【ステップ0：陣営割り当て（最重要・最初に必ず行え）】\n"
+        "各エージェントの「世界観」「絶対に譲れない立場」「戦闘原則」を読み、\n"
+        "そのキャラが議題に対してどの立場を取るかを思想的に判断してassigned_sideを決定せよ。\n"
+        "  ✗ 絶対禁止: キャラの思想を無視してsupportとopposeを機械的に交互に割り当てる\n"
+        "  ✓ 正しい例: エルドアン（大衆主権・強い執行権）→ 全体主義的手法を肯定 → support\n"
+        "  ✓ 正しい例: アーレント（公共性・全体主義批判）→ 全体主義を根本否定 → oppose\n"
+        "  ✓ 正しい例: イーロン（第一原理工学）→ イデオロギーより効率・技術革新 → neutral or support条件付き\n"
+        "全員が同じsideになる場合は、最も思想的に近い者をneutralに落とせ。\n"
+        "一度決めたassigned_sideはそのキャラの全turnで絶対に変えるな。\n"
         "\n"
         "【絶対条件1：真の対立】\n"
         "最低1名を否定派（oppose）として配置せよ。議題の前提そのものを「そんなことはない・前提が間違っている」と否定する側。\n"
