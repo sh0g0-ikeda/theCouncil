@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import asyncio
 
-from engine.llm import SYSTEM_PROMPT, assign_debate_frame, build_prompt, validate_reply_length
+from engine.llm import (
+    SYSTEM_PROMPT,
+    assign_debate_frame,
+    build_prompt,
+    build_script_post_messages,
+    validate_reply_length,
+)
 
 
 def _persona() -> dict[str, object]:
@@ -92,3 +98,22 @@ def test_assign_debate_frame_fallback_produces_assignments() -> None:
     assert frame["frame"]["proposition"]
     assert set(frame["assignments"]) == {"orwell", "marx"}
     assert all("camp_function" in assignment for assignment in frame["assignments"].values())
+
+
+def test_build_script_post_messages_is_re_exported_from_llm() -> None:
+    messages = build_script_post_messages(
+        _persona(),
+        directive="Define the term first, then rebut the target directly.",
+        move_type="define",
+        target_post={"id": 3, "agent_id": "marx", "display_name": "Marx", "content": "Capitalism collapses under its own contradictions."},
+        recent_posts=[{"id": 1, "agent_id": "mao", "display_name": "Mao", "content": "Revolution continues through contradiction."}],
+        rag_chunks=["Orwell focuses on euphemism and political language."],
+        thread_topic="Will capitalism eventually end?",
+        phase=1,
+        assigned_side="oppose",
+    )
+
+    assert len(messages) == 2
+    assert "JSON" in messages[0]["content"]
+    assert "Will capitalism eventually end?" in messages[1]["content"]
+    assert "Marx" in messages[1]["content"]

@@ -155,7 +155,7 @@ class ScriptedDiscussionRunner:
             return ResolvedTurn(
                 speaker_id=speaker_id,
                 target_post=target_post,
-                directive="繝ｦ繝ｼ繧ｶ繝ｼ縺ｮ逋ｺ險縺ｫ蟇ｾ縺励※縲√≠縺ｪ縺溘・遶句ｴ縺九ｉ謖醍匱逧・↓蜿崎ｫ悶○繧医ら嶌謇九・蜑肴署繧貞ｴｩ縺励∬ｫ也せ繧帝強縺冗ｵ槭ｊ霎ｼ繧・",
+                directive="ユーザーの発言に対して、あなたの立場から挑発的に反論せよ。相手の前提を崩し、論点を鋭く絞り込め",
                 move_type="counter",
                 phase=_get_phase(len(posts)),
                 assigned_side="",
@@ -197,7 +197,7 @@ class ScriptedDiscussionRunner:
         return ResolvedTurn(
             speaker_id=speaker_id,
             target_post=target_post,
-            directive=str(turn.get("directive", "逶ｸ謇九・荳ｻ蠑ｵ縺ｫ謖醍匱逧・↓蜿崎ｫ悶○繧医ょ燕謠舌・蠑ｱ轤ｹ繧剃ｸ轤ｹ縺縺醍ｪ√￠")),
+            directive=str(turn.get("directive", "相手の主張に挑発的に反論せよ。前提の弱点を一点だけ突け")),
             move_type=str(turn.get("move_type", "attack")),
             phase=int(turn.get("phase", _get_phase(len(posts)))),
             assigned_side=str(turn.get("assigned_side", "")),

@@ -10,18 +10,18 @@ import { apiFetch, type PostRecord, type ThreadSummary } from "@/lib/api";
 import { createThreadSocket } from "@/lib/websocket";
 
 const LOADING_TELOPS = [
-  "Agents are gathering their positions...",
-  "The debate structure is being assembled...",
-  "A fresh counterargument is being prepared...",
-  "Agents are working on the next move..."
+  "エージェントを呼び出しています",
+  "エージェントがタイムマシンに乗りました",
+  "まもなくエージェントが現代へ到着します",
+  "エージェントが席に着きました",
 ];
 
 const PHASE_LABELS: Record<number, string> = {
-  1: "Definition",
-  2: "Conflict",
-  3: "Depth",
-  4: "Shift",
-  5: "Closing"
+  1: "定義",
+  2: "対立",
+  3: "深化",
+  4: "転換",
+  5: "収束",
 };
 
 function mergePost(current: PostRecord[], incoming: PostRecord) {
@@ -33,8 +33,8 @@ function mergePost(current: PostRecord[], incoming: PostRecord) {
 
 function buildShareText(topic: string, names: string[]) {
   const castLine =
-    names.length >= 2 ? `${names[0]} and ${names[1]} are debating` : names.length === 1 ? `${names[0]} is debating` : "AI agents are debating";
-  return `${castLine} "${topic}" on The Council`;
+    names.length >= 2 ? `${names[0]}と${names[1]}が\n` : names.length === 1 ? `${names[0]}が\n` : "";
+  return `${castLine}「${topic}」について徹底討論！\n\nみんなの疑問を偉人AIが議論する掲示板！The Council`;
 }
 
 export default function ThreadPage() {
@@ -255,7 +255,7 @@ export default function ThreadPage() {
   if (!thread) {
     return (
       <main className="rounded-3xl border border-board-border bg-board-paper p-6 text-sm text-board-muted shadow-board">
-        {error || "Loading..."}
+        {error || "読み込み中..."}
       </main>
     );
   }
@@ -269,10 +269,10 @@ export default function ThreadPage() {
             <p className="mt-2 text-sm leading-6 text-board-muted">
               <span className="hidden sm:inline">{thread.agent_ids.join(" / ")} / </span>
               <span className="inline sm:hidden">{thread.agent_ids.length} agents / </span>
-              {posts.length} posts / {thread.state}
+              {posts.length} レス ・ {thread.state}
               {thread.current_phase != null ? (
                 <span className="ml-2 rounded-full bg-board-accent/10 px-2 py-0.5 text-xs font-medium text-board-accent">
-                  {PHASE_LABELS[thread.current_phase] ?? `P${thread.current_phase}`}
+                  {PHASE_LABELS[thread.current_phase] ?? `P${thread.current_phase}`}フェーズ
                 </span>
               ) : null}
             </p>
@@ -288,8 +288,8 @@ export default function ThreadPage() {
               <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 fill-current" aria-hidden="true">
                 <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.746l7.73-8.835L1.254 2.25H8.08l4.258 5.63 5.906-5.63Zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
               </svg>
-              {shared ? "Shared" : "Share on X"}
-              {quota ? <span className="ml-1 opacity-70">left {quota.remaining === null ? "unlimited" : quota.remaining}</span> : null}
+              {shared ? "共有済み ✓" : "Xで共有するとスレッド作成回数+5！"}
+              {!shared && quota ? <span className="ml-1 opacity-70">（今月残り{quota.remaining === null ? "∞" : quota.remaining}本）</span> : null}
             </button>
           </div>
         </div>
@@ -325,7 +325,7 @@ export default function ThreadPage() {
 
             return (
               <div className="rounded-2xl border border-board-border bg-board-paper p-4 shadow-board">
-                <p className="mb-3 text-xs font-semibold tracking-wide text-board-muted">Who was the sharpest?</p>
+                <p className="mb-3 text-xs font-semibold tracking-wide text-board-muted">一番キレてたのは誰？</p>
                 <div className="flex flex-wrap gap-2">
                   {agents.map((agent, index) => {
                     const count = votes[agent.id] ?? 0;
@@ -339,14 +339,14 @@ export default function ThreadPage() {
                         className={[
                           "flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition",
                           isVoted
-                            ? "border-board-accent bg-board-accent text-white"
-                            : "border-board-border bg-white text-board-ink hover:border-board-accent hover:text-board-accent"
+                            ? "border-rose-400 bg-rose-50 text-rose-600"
+                            : "border-board-border bg-white text-board-ink hover:border-rose-300 hover:text-rose-500"
                         ].join(" ")}
                       >
-                        {isTop ? <span>*</span> : null}
+                        {isTop ? <span>👑</span> : null}
                         <span>{agent.name}</span>
-                        <span className="opacity-70">votes</span>
-                        <span>{count}</span>
+                        <span className={isVoted ? "text-rose-400" : "text-board-muted"}>♡</span>
+                        <span className="font-bold">{count}</span>
                       </button>
                     );
                   })}
@@ -357,7 +357,7 @@ export default function ThreadPage() {
         : null}
 
       <div className="flex h-16 items-center justify-center rounded-2xl border border-dashed border-board-border bg-board-paper/50 text-xs text-board-muted">
-        Ad slot
+        広告スペース
       </div>
 
       <div ref={bottomRef} />
@@ -365,7 +365,7 @@ export default function ThreadPage() {
       <section className="sticky bottom-4 rounded-3xl border border-board-border bg-board-paper/95 p-4 shadow-board backdrop-blur">
         <textarea
           className="h-28 w-full rounded-2xl border border-board-border bg-white px-4 py-3 text-sm leading-7 text-board-ink outline-none transition focus:border-board-accent"
-          placeholder="Join the debate (30-220 chars)"
+          placeholder="議論に参加（30〜220文字）"
           value={input}
           onChange={(event) => setInput(event.target.value)}
           maxLength={220}
@@ -373,7 +373,7 @@ export default function ThreadPage() {
         <div className="mt-3 flex items-center justify-between gap-4">
           <div className="text-xs text-board-muted">
             {input.length} / 220
-            {input.length < 30 && !isOwner ? <span className="ml-2">Enter at least 30 characters</span> : null}
+            {input.length < 30 && !isOwner ? <span className="ml-2">・30文字以上必要</span> : null}
             {error ? <span className="ml-3 text-board-warn">{error}</span> : null}
           </div>
           <button
@@ -382,7 +382,7 @@ export default function ThreadPage() {
             disabled={sending}
             className="rounded-full bg-board-accent px-5 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {sending ? "Sending..." : "Post"}
+            {sending ? "送信中..." : "書き込む"}
           </button>
         </div>
       </section>
