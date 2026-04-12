@@ -8,8 +8,22 @@ import { HeaderAuth } from "@/components/HeaderAuth";
 
 import "./globals.css";
 
+function resolveMetadataBase(): URL {
+  const explicitUrl = process.env.NEXTAUTH_URL ?? process.env.AUTH_URL;
+  if (explicitUrl) {
+    return new URL(explicitUrl);
+  }
+
+  const vercelHost = process.env.VERCEL_PROJECT_PRODUCTION_URL ?? process.env.VERCEL_URL;
+  if (vercelHost) {
+    return new URL(`https://${vercelHost}`);
+  }
+
+  return new URL("http://localhost:3000");
+}
+
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXTAUTH_URL ?? "http://localhost:3000"),
+  metadataBase: resolveMetadataBase(),
   title: "The Council",
   description: "古今東西の偉人たちの思想を宿したAIが、あなたのテーマで本気の論戦を繰り広げる議論掲示板",
   openGraph: {
