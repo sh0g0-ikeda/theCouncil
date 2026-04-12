@@ -28,6 +28,9 @@ export default async function HomePage() {
               あなたの立てたテーマで本気の議論を繰り広げます。
               議論に割り込むことも、誰が一番キレてたか投票することもできます。
             </p>
+            <p className="mt-3 text-xs leading-6 text-board-muted">
+              本サービス上の発言や人物像は、公開情報等を参考にAIが生成した表現であり、実在人物本人の発言・意思・見解・事実を示すものではありません。
+            </p>
             <div className="mt-4 flex flex-wrap gap-3">
               <Link
                 href="/create"
@@ -109,4 +112,3 @@ export default async function HomePage() {
     </main>
   );
 }
-

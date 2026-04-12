@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { signIn, useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
@@ -16,6 +17,7 @@ export function CreateThreadForm({ agents }: { agents: AgentSummary[] }) {
   const [visibility, setVisibility] = useState<"public" | "private">("public");
   const [selectedIds, setSelectedIds] = useState<string[]>(agents.slice(0, 2).map((agent) => agent.id));
   const [quota, setQuota] = useState<Quota | null>(null);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
 
   useEffect(() => {
     if (!session?.user) return;
@@ -27,7 +29,8 @@ export function CreateThreadForm({ agents }: { agents: AgentSummary[] }) {
   const [submitting, setSubmitting] = useState(false);
 
   const maxAgents = quota?.plan === "pro" || quota?.plan === "ultra" ? 8 : 4;
-  const canSubmit = topic.trim().length >= 3 && selectedIds.length >= 2 && selectedIds.length <= maxAgents;
+  const canSubmit =
+    topic.trim().length >= 3 && selectedIds.length >= 2 && selectedIds.length <= maxAgents && acceptedTerms;
   const chosenLabels = useMemo(
     () =>
       agents
@@ -56,6 +59,10 @@ export function CreateThreadForm({ agents }: { agents: AgentSummary[] }) {
     }
 
     if (!canSubmit) {
+      if (!acceptedTerms) {
+        setError("利用規約への同意が必要です");
+        return;
+      }
       setError(`テーマ3文字以上、人格は2〜${maxAgents}体で選択してください。`);
       return;
     }
@@ -119,6 +126,26 @@ export function CreateThreadForm({ agents }: { agents: AgentSummary[] }) {
 
       <AgentSelector agents={agents} selectedIds={selectedIds} onToggle={toggleAgent} />
 
+      <label className="mt-5 flex items-start gap-3 rounded-2xl border border-board-border bg-white px-4 py-3 text-sm text-board-ink">
+        <input
+          type="checkbox"
+          checked={acceptedTerms}
+          onChange={(event) => {
+            setAcceptedTerms(event.target.checked);
+            if (event.target.checked) {
+              setError("");
+            }
+          }}
+          className="mt-0.5 h-4 w-4 rounded border-board-border text-board-accent focus:ring-board-accent"
+        />
+        <span className="leading-6">
+          <Link href="/terms" target="_blank" className="font-semibold text-board-accent underline underline-offset-2">
+            利用規約
+          </Link>
+          に同意してスレッドを作成します。
+        </span>
+      </label>
+
       {error ? <p className="mt-4 text-sm text-board-warn">{error}</p> : null}
 
       <div className="mt-6 flex items-center justify-between">
@@ -149,4 +176,3 @@ export function CreateThreadForm({ agents }: { agents: AgentSummary[] }) {
     </div>
   );
 }
-

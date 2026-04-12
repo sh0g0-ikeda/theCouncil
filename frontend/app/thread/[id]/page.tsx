@@ -51,6 +51,7 @@ export default function ThreadPage() {
   const [telopIndex, setTelopIndex] = useState(0);
   const [votes, setVotes] = useState<Record<string, number>>({});
   const [myVote, setMyVote] = useState<string | null>(null);
+  const [voteError, setVoteError] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const atBottomRef = useRef(true);
@@ -81,7 +82,10 @@ export default function ThreadPage() {
       {},
       session?.user
     )
-      .then((result) => setVotes(result.counts))
+      .then((result) => {
+        setVotes(result.counts);
+        setVoteError("");
+      })
       .catch(() => {});
   }, [threadId, session?.user]);
 
@@ -95,8 +99,11 @@ export default function ThreadPage() {
       .then((result) => {
         setVotes(result.counts);
         setMyVote(result.my_vote);
+        setVoteError("");
       })
-      .catch(() => {});
+      .catch((loadError) => {
+        setVoteError(loadError instanceof Error ? loadError.message : "投票情報の取得に失敗しました");
+      });
   }, [threadId, session]);
 
   useEffect(() => {
@@ -173,6 +180,7 @@ export default function ThreadPage() {
 
     const prevVotes = { ...votes };
     const prevMyVote = myVote;
+    setVoteError("");
     setMyVote(agentId);
     setVotes((current) => {
       const next = { ...current };
@@ -196,9 +204,13 @@ export default function ThreadPage() {
       );
       setVotes(result.counts);
       setMyVote(result.my_vote);
-    } catch {
+      setVoteError("");
+    } catch (voteSubmitError) {
       setVotes(prevVotes);
       setMyVote(prevMyVote);
+      setVoteError(
+        voteSubmitError instanceof Error ? voteSubmitError.message : "投票の送信に失敗しました"
+      );
     }
   };
 
@@ -259,6 +271,15 @@ export default function ThreadPage() {
       </main>
     );
   }
+
+  const voteCandidates = thread.agent_ids
+    .map((agentId) => {
+      const latestPost = [...posts]
+        .reverse()
+        .find((post) => post.agent_id === agentId && post.display_name);
+      return { id: agentId, name: latestPost?.display_name ?? agentId };
+    })
+    .sort((a, b) => (votes[b.id] ?? 0) - (votes[a.id] ?? 0));
 
   return (
     <main className="space-y-4">
@@ -332,19 +353,11 @@ export default function ThreadPage() {
 
       {showVotes
         ? (() => {
-            const agents = Array.from(
-              new Map(
-                posts
-                  .filter((post) => post.agent_id)
-                  .map((post) => [post.agent_id!, { id: post.agent_id!, name: post.display_name ?? post.agent_id! }])
-              ).values()
-            ).sort((a, b) => (votes[b.id] ?? 0) - (votes[a.id] ?? 0));
-
             return (
               <div className="rounded-2xl border border-board-border bg-board-paper p-4 shadow-board">
                 <p className="mb-3 text-xs font-semibold tracking-wide text-board-muted">一番キレてたのは誰？</p>
                 <div className="flex flex-wrap gap-2">
-                  {agents.map((agent, index) => {
+                  {voteCandidates.map((agent, index) => {
                     const count = votes[agent.id] ?? 0;
                     const isVoted = myVote === agent.id;
                     const isTop = index === 0 && count > 0;
@@ -368,6 +381,7 @@ export default function ThreadPage() {
                     );
                   })}
                 </div>
+                {voteError ? <p className="mt-3 text-xs text-board-warn">{voteError}</p> : null}
               </div>
             );
           })()
