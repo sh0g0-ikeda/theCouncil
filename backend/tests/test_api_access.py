@@ -130,6 +130,15 @@ def test_create_thread_request_accepts_plan_ceiling_values() -> None:
     assert req.max_posts == 200
 
 
+def test_create_thread_request_tracks_when_max_posts_is_omitted() -> None:
+    if CreateThreadRequest is None:
+        return
+
+    req = CreateThreadRequest(topic="test topic", agent_ids=["a", "b"])
+    assert req.max_posts == 20
+    assert "max_posts" not in req.model_fields_set
+
+
 def test_refresh_runtime_agent_removes_disabled_agent() -> None:
     agents["disabled-agent"] = Agent(
         id="disabled-agent",

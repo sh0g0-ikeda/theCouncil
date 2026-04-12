@@ -206,7 +206,7 @@ def test_start_discussion_cleans_up_finished_task() -> None:
     original_run_discussion = discussion_module.run_discussion
     discussion_module._discussion_tasks.clear()
 
-    async def fake_run_discussion(_thread_id: str, _push_fn) -> None:
+    async def fake_run_discussion(_thread_id: str, _push_fn, priority: int = 0) -> None:
         return None
 
     async def fake_push(_thread_id: str, _payload: dict[str, object]) -> None:

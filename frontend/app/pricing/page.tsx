@@ -3,6 +3,7 @@
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+
 import { getApiBaseUrl } from "@/lib/api";
 import { sessionHeaders } from "@/lib/session-user";
 
@@ -12,7 +13,7 @@ const PLANS = [
     name: "Free",
     price: "¥0",
     period: "",
-    features: ["月3スレッドまで作成", "議論への参加・閲覧", "投票機能"],
+    features: ["月3スレッドまで作成", "1スレッド最大20レス", "議論への参加・閲覧", "投票機能"],
     cta: "現在のプラン",
     highlight: false,
   },
@@ -21,7 +22,7 @@ const PLANS = [
     name: "Pro",
     price: "¥500",
     period: "/月",
-    features: ["月20スレッドまで作成", "プライベートスレッド（月5回）", "優先処理キュー", "Free の全機能"],
+    features: ["月20スレッドまで作成", "1スレッド最大30レス", "プライベートスレッド（月5回）", "優先処理キュー", "Free の全機能"],
     cta: "Pro にアップグレード",
     highlight: true,
   },
@@ -30,7 +31,7 @@ const PLANS = [
     name: "Ultra",
     price: "¥1,800",
     period: "/月",
-    features: ["月無制限スレッド作成", "プライベートスレッド無制限", "最優先処理", "Pro の全機能"],
+    features: ["月無制限スレッド作成", "1スレッド最大30レス", "プライベートスレッド無制限", "最優先処理", "Pro の全機能"],
     cta: "Ultra にアップグレード",
     highlight: false,
   },
@@ -64,7 +65,7 @@ export default function PricingPage() {
       const headers = sessionHeaders(session.user as any);
       const res = await fetch(`${getApiBaseUrl()}/api/billing/checkout`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...headers as Record<string, string> },
+        headers: { "Content-Type": "application/json", ...(headers as Record<string, string>) },
         body: JSON.stringify({
           plan: planId,
           success_url: `${origin}/billing/success?plan=${planId}`,
@@ -111,7 +112,7 @@ export default function PricingPage() {
       <section className="rounded-3xl border border-board-border bg-board-paper p-6 shadow-board">
         <h1 className="text-2xl font-black tracking-tight text-board-ink">プラン・料金</h1>
         <p className="mt-2 text-sm text-board-muted">
-          The Council の全機能を解放して、偉人AIたちとの深い議論を楽しもう。
+          The Council の全機能を解放して、偉人AIたちとの濃い議論を楽しもう。
         </p>
       </section>
 
@@ -129,9 +130,7 @@ export default function PricingPage() {
             <div
               key={plan.id}
               className={`flex flex-col rounded-3xl border p-6 shadow-board ${
-                plan.highlight
-                  ? "border-board-accent bg-emerald-50"
-                  : "border-board-border bg-board-paper"
+                plan.highlight ? "border-board-accent bg-emerald-50" : "border-board-border bg-board-paper"
               }`}
             >
               {plan.highlight && (
@@ -145,10 +144,10 @@ export default function PricingPage() {
                 <span className="text-sm text-board-muted">{plan.period}</span>
               </div>
               <ul className="mb-6 flex-1 space-y-2 text-sm text-board-muted">
-                {plan.features.map((f) => (
-                  <li key={f} className="flex items-start gap-2">
+                {plan.features.map((feature) => (
+                  <li key={feature} className="flex items-start gap-2">
                     <span className="mt-0.5 text-board-accent">✓</span>
-                    {f}
+                    {feature}
                   </li>
                 ))}
               </ul>

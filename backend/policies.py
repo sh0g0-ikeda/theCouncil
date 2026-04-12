@@ -6,6 +6,12 @@ PLAN_MAX_POSTS = {
     "ultra": 200,
 }
 
+PLAN_DEFAULT_POSTS = {
+    "free": 20,
+    "pro": 30,
+    "ultra": 30,
+}
+
 PLAN_MAX_AGENTS = {
     "free": 4,
     "pro": 8,
@@ -36,6 +42,10 @@ PLAN_QUEUE_PRIORITY: dict[str, int] = {
 
 def clamp_max_posts(plan: str, requested: int) -> int:
     return min(requested, PLAN_MAX_POSTS.get(plan, PLAN_MAX_POSTS["free"]))
+
+
+def default_max_posts(plan: str) -> int:
+    return PLAN_DEFAULT_POSTS.get(plan, PLAN_DEFAULT_POSTS["free"])
 
 
 def max_agents(plan: str) -> int:

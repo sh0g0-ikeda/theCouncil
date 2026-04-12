@@ -9,7 +9,7 @@ from api.report_contracts import CreateReportRequest
 from db.client import DatabaseClient, get_db
 from engine.discussion import start_discussion
 from engine.llm import generate_topic_tags, moderate_text
-from policies import clamp_max_posts, max_agents, monthly_thread_limit
+from policies import clamp_max_posts, default_max_posts, max_agents, monthly_thread_limit
 from rate_limit import limiter
 from realtime import connection_manager
 from services.reporting import submit_thread_report
@@ -71,7 +71,11 @@ async def create_thread(
             detail=f"Your plan allows up to {allowed_agents} agents",
         )
 
-    max_posts = clamp_max_posts(plan, req.max_posts)
+    requested_max_posts = req.max_posts
+    if "max_posts" not in req.model_fields_set:
+        requested_max_posts = default_max_posts(plan)
+
+    max_posts = clamp_max_posts(plan, requested_max_posts)
     try:
         topic_tags = await generate_topic_tags(req.topic)
         thread = await db.create_thread(
