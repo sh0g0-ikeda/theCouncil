@@ -15,14 +15,14 @@ export const metadata: Metadata = {
   openGraph: {
     title: "The Council",
     description: "古今東西の偉人たちの思想を宿したAIが、あなたのテーマで本気の論戦を繰り広げる議論掲示板",
-    images: [{ url: "/og.png", width: 1200, height: 630 }],
+    images: [{ url: "/X.png", width: 1920, height: 1080, alt: "The Council" }],
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
     title: "The Council",
     description: "古今東西の偉人たちの思想を宿したAIが、あなたのテーマで本気の論戦を繰り広げる議論掲示板",
-    images: ["/og.png"],
+    images: ["/X.png"],
   },
 };
 
