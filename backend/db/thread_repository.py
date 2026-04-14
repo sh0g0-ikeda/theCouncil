@@ -1,9 +1,26 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Any
 
 from db.shared import row_to_dict
+
+
+def _coerce_state_json(raw: Any) -> dict[str, Any] | None:
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    if isinstance(raw, Mapping):
+        return dict(raw)
+    return None
 
 
 class ThreadRepositoryMixin:
@@ -366,8 +383,7 @@ class ThreadRepositoryMixin:
             )
         if row is None:
             return None
-        raw = row["state_json"]
-        return dict(raw) if raw else None
+        return _coerce_state_json(row["state_json"])
 
     async def save_debate_state(self, thread_id: str, state: dict) -> None:
         pool = await self._ensure_pool()
