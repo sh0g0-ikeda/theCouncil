@@ -217,3 +217,31 @@ def test_validate_generated_reply_accepts_structured_turn_contract_answer() -> N
     )
 
     assert result.ok is True
+
+
+def test_validate_generated_reply_allows_first_define_turn_without_explicit_definition_term_match() -> None:
+    result = validate_generated_reply(
+        {
+            "main_axis": "war ethics",
+            "content": "戦争は国家存続への直接侵略があり、他の手段が尽きた場合に限って議論対象になる。",
+            "stance": "disagree",
+            "local_stance_to_target": "disagree",
+            "proposition_stance": "oppose",
+            "camp_function": "ethics",
+            "subquestion_id": "",
+        },
+        {
+            "target_post": {},
+            "conflict_axis": "war ethics",
+            "assigned_side": "oppose",
+            "pending_definition_terms": ["やむをえない時"],
+            "required_response_kind": "define",
+            "debate_post_count": 0,
+            "is_first_post": True,
+            "turn_contract": {
+                "must_define_terms": ["やむをえない時"],
+            },
+        },
+    )
+
+    assert result.ok is True
