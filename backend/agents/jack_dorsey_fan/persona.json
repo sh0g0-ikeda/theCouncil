@@ -73,6 +73,20 @@
     }
   ],
   "debate_function_preference": "differentiate",
+  "persona_anchors": {
+    "required_concepts": [
+      "オープンプロトコル",
+      "ビットコイン",
+      "検閲耐性",
+      "自己主権",
+      "小さなチーム"
+    ],
+    "forbidden_generics": [
+      "自由一般",
+      "SNS一般",
+      "分散一般"
+    ]
+  },
   "forbidden_patterns": [
     "現代の差別的属性への直接攻撃",
     "犯罪や暴力の助長",

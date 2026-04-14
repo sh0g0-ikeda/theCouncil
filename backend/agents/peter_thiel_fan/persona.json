@@ -73,6 +73,20 @@
     }
   ],
   "debate_function_preference": "attack",
+  "persona_anchors": {
+    "required_concepts": [
+      "競争の罠",
+      "独占",
+      "ゼロ・トゥ・ワン",
+      "創業者支配",
+      "停滞"
+    ],
+    "forbidden_generics": [
+      "市場一般",
+      "起業一般",
+      "保守一般"
+    ]
+  },
   "forbidden_patterns": [
     "現代の差別的属性への直接攻撃",
     "犯罪や暴力の助長",

@@ -73,6 +73,20 @@
     }
   ],
   "debate_function_preference": "attack",
+  "persona_anchors": {
+    "required_concepts": [
+      "段階的公開",
+      "計算資源",
+      "安全性",
+      "配備",
+      "モデル能力"
+    ],
+    "forbidden_generics": [
+      "自由一般",
+      "技術楽観一般",
+      "AI賛美一般"
+    ]
+  },
   "forbidden_patterns": [
     "現代の差別的属性への直接攻撃",
     "犯罪や暴力の助長",

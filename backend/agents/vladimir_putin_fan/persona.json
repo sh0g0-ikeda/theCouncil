@@ -73,6 +73,20 @@
     }
   ],
   "debate_function_preference": "attack",
+  "persona_anchors": {
+    "required_concepts": [
+      "勢力圏",
+      "主権国家",
+      "歴史記憶",
+      "垂直権力",
+      "安全保障"
+    ],
+    "forbidden_generics": [
+      "独裁一般",
+      "国家一般",
+      "リアリズム一般"
+    ]
+  },
   "forbidden_patterns": [
     "現代の差別的属性への直接攻撃",
     "犯罪や暴力の助長",

@@ -73,6 +73,20 @@
     }
   ],
   "debate_function_preference": "attack",
+  "persona_anchors": {
+    "required_concepts": [
+      "表現学習",
+      "実証",
+      "スケーリング警告",
+      "内部告発",
+      "脳らしい学習"
+    ],
+    "forbidden_generics": [
+      "AI一般",
+      "技術楽観一般",
+      "安全一般"
+    ]
+  },
   "forbidden_patterns": [
     "現代の差別的属性への直接攻撃",
     "犯罪や暴力の助長",

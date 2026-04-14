@@ -140,10 +140,15 @@ class DebateState(DebateStateSerializationMixin, DebateStateControlMixin, Debate
     ) -> None:
         self.last_seen_post_id = max(self.last_seen_post_id, int(post_id))
         fingerprint = str(analysis.get("argument_fingerprint", "")).strip()
+        proposition_fingerprint = str(analysis.get("proposition_fingerprint", "")).strip()
         if fingerprint:
             self.recent_argument_fingerprints.append(fingerprint)
             if len(self.recent_argument_fingerprints) > 12:
                 self.recent_argument_fingerprints.pop(0)
+        if speaker_id and proposition_fingerprint:
+            proposition_count = self.record_proposition(speaker_id, proposition_fingerprint)
+            if proposition_count >= 3:
+                self.alerts.add("camp_reassert")
 
         for example_key in [str(value).strip() for value in analysis.get("example_keys", [])]:
             if not example_key:
@@ -274,6 +279,19 @@ class DebateState(DebateStateSerializationMixin, DebateStateControlMixin, Debate
                 "side": self.agent_sides.get(speaker_id, ""),
                 "source": "post",
             }
+
+        claim_structure = dict(analysis.get("claim_structure") or {})
+        if speaker_id and claim_structure:
+            self.open_claim_structures.append(
+                {
+                    "agent_id": speaker_id,
+                    "post_id": post_id,
+                    "structure": claim_structure,
+                    "proposition_fingerprint": proposition_fingerprint,
+                }
+            )
+            if len(self.open_claim_structures) > 20:
+                self.open_claim_structures.pop(0)
 
         aligned_side = str(analysis.get("aligned_side", "")).strip()
         if stance == "shift" and aligned_side and aligned_side != self.agent_sides.get(speaker_id, ""):

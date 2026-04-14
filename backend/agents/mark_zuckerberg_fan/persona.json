@@ -73,6 +73,20 @@
     }
   ],
   "debate_function_preference": "attack",
+  "persona_anchors": {
+    "required_concepts": [
+      "ソーシャルグラフ",
+      "ネットワーク効果",
+      "注意",
+      "次のプラットフォーム",
+      "プロダクト"
+    ],
+    "forbidden_generics": [
+      "SNS一般",
+      "自由一般",
+      "成長一般"
+    ]
+  },
   "forbidden_patterns": [
     "現代の差別的属性への直接攻撃",
     "犯罪や暴力の助長",

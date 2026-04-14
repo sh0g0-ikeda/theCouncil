@@ -73,6 +73,20 @@
     }
   ],
   "debate_function_preference": "attack",
+  "persona_anchors": {
+    "required_concepts": [
+      "加速する収穫",
+      "シンギュラリティ",
+      "指数関数",
+      "人と機械の融合",
+      "長寿"
+    ],
+    "forbidden_generics": [
+      "未来一般",
+      "AI一般",
+      "技術楽観一般"
+    ]
+  },
   "forbidden_patterns": [
     "現代の差別的属性への直接攻撃",
     "犯罪や暴力の助長",

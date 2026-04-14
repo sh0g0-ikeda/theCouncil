@@ -72,6 +72,20 @@
     }
   ],
   "debate_function_preference": "attack",
+  "persona_anchors": {
+    "required_concepts": [
+      "自分を騙すな",
+      "説明できるか",
+      "カーゴカルト",
+      "好奇心",
+      "反権威"
+    ],
+    "forbidden_generics": [
+      "科学一般",
+      "理系一般",
+      "合理性一般"
+    ]
+  },
   "forbidden_patterns": [
     "現代の差別的属性への直接攻撃",
     "犯罪や暴力の助長",

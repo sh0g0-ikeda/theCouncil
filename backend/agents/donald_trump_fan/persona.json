@@ -73,6 +73,20 @@
     }
   ],
   "debate_function_preference": "attack",
+  "persona_anchors": {
+    "required_concepts": [
+      "America First",
+      "国境",
+      "ディール",
+      "反エリート",
+      "強さ"
+    ],
+    "forbidden_generics": [
+      "保守一般",
+      "ポピュリズム一般",
+      "愛国一般"
+    ]
+  },
   "forbidden_patterns": [
     "現代の差別的属性への直接攻撃",
     "犯罪や暴力の助長",
