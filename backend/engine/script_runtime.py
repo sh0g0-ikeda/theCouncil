@@ -35,18 +35,6 @@ from models.agent import Agent
 logger = logging.getLogger(__name__)
 
 _TURN_FAIL_LIMIT = 3
-_TURN_DELAYS = {
-    "instant": 0.0,
-    "fast": 0.4,
-    "normal": 2.0,
-    "slow": 5.0,
-}
-_RETRY_DELAYS = {
-    "instant": 0.0,
-    "fast": 0.2,
-    "normal": 1.0,
-    "slow": 2.0,
-}
 _QUESTION_LABEL_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"誰|だれ"), "判断主体"),
     (re.compile(r"基準|条件|要件|どのよう|どうやって|どう判断|いつ"), "判断基準"),
@@ -103,14 +91,6 @@ def _required_labels_from_subquestion(text: str) -> list[str]:
         if pattern.search(text or ""):
             labels.append(label)
     return _merge_unique_labels(labels)
-
-
-def _turn_delay_seconds(speed_mode: str) -> float:
-    return _TURN_DELAYS.get(str(speed_mode or "").strip(), _TURN_DELAYS["normal"])
-
-
-def _retry_delay_seconds(speed_mode: str) -> float:
-    return _RETRY_DELAYS.get(str(speed_mode or "").strip(), _RETRY_DELAYS["normal"])
 
 
 @dataclass(slots=True)
@@ -189,7 +169,7 @@ class ScriptedDiscussionRunner:
                     continue
 
                 await self._persist_reply(thread, posts, resolved, reply)
-                await asyncio.sleep(_turn_delay_seconds(str(thread.get("speed_mode", "normal"))))
+                await asyncio.sleep(2.0)
         except Exception:
             logger.exception("run_discussion crashed for thread=%s", self.thread_id)
 
@@ -218,7 +198,7 @@ class ScriptedDiscussionRunner:
             return True
 
         logger.warning("Script generation failed for thread=%s, retrying in 5s", self.thread_id)
-        await asyncio.sleep(_retry_delay_seconds(str(thread.get("speed_mode", "normal"))))
+        await asyncio.sleep(5)
         return False
 
     async def _ensure_debate_state(self, thread: dict[str, Any]) -> DebateState:
@@ -653,7 +633,7 @@ class ScriptedDiscussionRunner:
             self.state.turn_fail_counts[self.state.script_turn_index] = (
                 self.state.turn_fail_counts.get(self.state.script_turn_index, 0) + 1
             )
-        await asyncio.sleep(_retry_delay_seconds(str(thread.get("speed_mode", "normal"))))
+        await asyncio.sleep(1)
         return None
 
     async def _persist_reply(

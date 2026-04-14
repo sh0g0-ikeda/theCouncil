@@ -602,7 +602,6 @@ def validate_generated_reply(reply: dict[str, Any], context: dict[str, Any]) -> 
     recent_axes = [str(axis) for axis in context.get("agent_recent_axes", [])]
     target_post = context.get("target_post", {}) or {}
     debate_post_count = int(context.get("debate_post_count", 999))
-    is_first_post = bool(context.get("is_first_post"))
     abstract_terms = [str(t) for t in context.get("abstract_terms", []) if str(t).strip()]
     pending_abstract = [t for t in abstract_terms if t not in {str(v) for v in context.get("resolved_abstract_terms", [])}]
 
@@ -649,15 +648,10 @@ def validate_generated_reply(reply: dict[str, Any], context: dict[str, Any]) -> 
 
     pending_terms = [str(term) for term in context.get("pending_definition_terms", []) if str(term).strip()]
     required_kind = str(context.get("required_response_kind", ""))
-    if (
-        pending_terms
-        and required_kind in {"define", "differentiate"}
-        and not analysis.definition_terms
-        and not is_first_post
-    ):
+    if pending_terms and required_kind in {"define", "differentiate"} and not analysis.definition_terms:
         return ValidationResult(False, f"Resolve at least one pending term: {' / '.join(pending_terms[:2])}.", analysis)
     contract_define_terms = [str(term) for term in turn_contract.get("must_define_terms", []) if str(term).strip()]
-    if contract_define_terms and not ({*analysis.definition_terms} & {*contract_define_terms}) and not is_first_post:
+    if contract_define_terms and not ({*analysis.definition_terms} & {*contract_define_terms}):
         return ValidationResult(False, f"Define at least one required term: {' / '.join(contract_define_terms[:2])}.", analysis)
 
     assigned_side = str(context.get("assigned_side", "")).strip()

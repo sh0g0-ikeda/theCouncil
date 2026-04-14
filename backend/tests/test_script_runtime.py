@@ -210,11 +210,3 @@ def test_build_generation_context_includes_position_anchor_terms() -> None:
     )
 
     assert context["position_anchor_terms"] == ["公共空間", "複数性"]
-
-
-def test_turn_delay_seconds_follows_speed_mode() -> None:
-    assert runtime_module._turn_delay_seconds("instant") == 0.0
-    assert runtime_module._turn_delay_seconds("fast") == 0.4
-    assert runtime_module._turn_delay_seconds("normal") == 2.0
-    assert runtime_module._turn_delay_seconds("slow") == 5.0
-    assert runtime_module._turn_delay_seconds("unknown") == 2.0
