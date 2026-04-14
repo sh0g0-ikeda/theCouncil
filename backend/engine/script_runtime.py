@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -35,62 +34,6 @@ from models.agent import Agent
 logger = logging.getLogger(__name__)
 
 _TURN_FAIL_LIMIT = 3
-_QUESTION_LABEL_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"誰|だれ"), "判断主体"),
-    (re.compile(r"基準|条件|要件|どのよう|どうやって|どう判断|いつ"), "判断基準"),
-    (re.compile(r"撤退|歯止め|制約|例外|監視|安全装置|どう防ぐ"), "制約条件"),
-)
-
-_QUESTION_LABEL_PATTERNS = (
-    (re.compile(r"(誰|だれ|who)", re.IGNORECASE), "判断主体"),
-    (
-        re.compile(r"(基準|条件|要件|どうやって|どう判断|いつ|when|whether|criteria|condition|threshold)", re.IGNORECASE),
-        "判断基準",
-    ),
-    (
-        re.compile(r"(制約|歯止め|撤退|例外|監視|安全装置|safeguard|constraint|limit)", re.IGNORECASE),
-        "制約条件",
-    ),
-)
-
-
-def _merge_unique_labels(*groups: list[str]) -> list[str]:
-    labels: list[str] = []
-    for group in groups:
-        for label in group:
-            cleaned = str(label).strip()
-            if cleaned and cleaned not in labels:
-                labels.append(cleaned)
-    return labels
-
-
-def _normalize_turn_contract(raw_contract: Any) -> dict[str, Any]:
-    if not isinstance(raw_contract, dict):
-        return {}
-    return {
-        "must_answer_subquestion_id": str(raw_contract.get("must_answer_subquestion_id", "")).strip(),
-        "must_answer_subquestion_text": str(raw_contract.get("must_answer_subquestion_text", "")).strip(),
-        "must_define_terms": [
-            str(term).strip()
-            for term in raw_contract.get("must_define_terms", [])
-            if str(term).strip()
-        ][:3],
-        "required_labels": _merge_unique_labels([
-            str(label).strip()
-            for label in raw_contract.get("required_labels", [])
-            if str(label).strip()
-        ]),
-        "forbid_question_only": bool(raw_contract.get("forbid_question_only")),
-        "resolution_target": str(raw_contract.get("resolution_target", "")).strip(),
-    }
-
-
-def _required_labels_from_subquestion(text: str) -> list[str]:
-    labels = ["結論"] if str(text).strip() else []
-    for pattern, label in _QUESTION_LABEL_PATTERNS:
-        if pattern.search(text or ""):
-            labels.append(label)
-    return _merge_unique_labels(labels)
 
 
 @dataclass(slots=True)
@@ -102,7 +45,6 @@ class ResolvedTurn:
     phase: int
     assigned_side: str
     is_user_reply_turn: bool
-    turn_contract: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -344,7 +286,6 @@ class ScriptedDiscussionRunner:
             phase=int(turn.get("phase", _get_phase(len(posts)))),
             assigned_side=assigned_side,
             is_user_reply_turn=False,
-            turn_contract=_normalize_turn_contract(turn.get("turn_contract", {})),
         )
 
     def _required_response_kind(self, move_type: str, is_user_reply_turn: bool) -> str:
@@ -409,38 +350,6 @@ class ScriptedDiscussionRunner:
             if payload.get("status") == "answered"
         )
 
-    def _build_turn_contract(
-        self,
-        debate: DebateState,
-        resolved: ResolvedTurn,
-        required_kind: str,
-        priority_subquestion: dict[str, Any],
-    ) -> dict[str, Any]:
-        contract = _normalize_turn_contract(resolved.turn_contract)
-        required_labels = list(contract.get("required_labels", []))
-
-        if required_kind in {"define", "differentiate"}:
-            pending_terms = debate.get_unresolved_terms()
-            if pending_terms:
-                existing_terms = list(contract.get("must_define_terms", []))
-                contract["must_define_terms"] = _merge_unique_labels(existing_terms, pending_terms[:2])
-                required_labels = _merge_unique_labels(required_labels, ["定義"])
-
-        subquestion_id = str(priority_subquestion.get("subquestion_id", "")).strip()
-        subquestion_text = str(priority_subquestion.get("text", "")).strip()
-        if subquestion_id:
-            contract["must_answer_subquestion_id"] = subquestion_id
-            contract["must_answer_subquestion_text"] = subquestion_text
-            contract["forbid_question_only"] = True
-            contract["resolution_target"] = contract.get("resolution_target") or "answered"
-            required_labels = _merge_unique_labels(required_labels, _required_labels_from_subquestion(subquestion_text))
-
-        if resolved.move_type in {"compression", "final_verdict"}:
-            required_labels = _merge_unique_labels(required_labels, ["結論"])
-
-        contract["required_labels"] = required_labels
-        return contract
-
     def _camp_map_summary(self, thread: dict[str, Any], debate: DebateState) -> str:
         parts: list[str] = []
         for agent_id in thread["agent_ids"]:
@@ -486,7 +395,6 @@ class ScriptedDiscussionRunner:
         ).strip()
         required_kind = self._resolve_required_response_kind(posts, debate, resolved)
         priority_subquestion = debate.get_priority_subquestion_for(resolved.speaker_id) or {}
-        turn_contract = self._build_turn_contract(debate, resolved, required_kind, priority_subquestion)
         focus_axis = str(target_post.get("focus_axis", "")).strip()
         if not focus_axis:
             axes = debate.topic_axes or thread.get("topic_tags", [])
@@ -520,7 +428,6 @@ class ScriptedDiscussionRunner:
             "assigned_camp_function": debate.get_camp_function(resolved.speaker_id),
             "required_subquestion_id": str(priority_subquestion.get("subquestion_id", "")).strip(),
             "required_subquestion_text": str(priority_subquestion.get("text", "")).strip(),
-            "turn_contract": turn_contract,
             "pending_definition_terms": debate.get_unresolved_terms(),
             "recent_argument_fingerprints": list(debate.recent_argument_fingerprints[-6:]),
             "forbidden_example_keys": list(debate.recent_example_keys[-4:]),
@@ -582,7 +489,6 @@ class ScriptedDiscussionRunner:
                 assigned_camp_function=str(context.get("assigned_camp_function", "")),
                 required_subquestion_id=str(context.get("required_subquestion_id", "")),
                 required_subquestion_text=str(context.get("required_subquestion_text", "")),
-                turn_contract=dict(context.get("turn_contract") or {}),
                 pending_definition_terms=list(context.get("pending_definition_terms", [])),
                 topic_axes=list(context.get("topic_axes", [])),
                 recent_argument_fingerprints=list(context.get("recent_argument_fingerprints", [])),

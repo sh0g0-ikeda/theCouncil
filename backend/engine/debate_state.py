@@ -5,7 +5,6 @@ from typing import Any
 from engine.debate_state_control import DebateStateControlMixin
 from engine.debate_state_queries import DebateStateQueryMixin
 from engine.debate_state_serialization import DebateStateSerializationMixin
-from engine.debate_state_support import CONTRACT_TOKEN_PATTERN
 
 
 class DebateState(DebateStateSerializationMixin, DebateStateControlMixin, DebateStateQueryMixin):
@@ -247,30 +246,11 @@ class DebateState(DebateStateSerializationMixin, DebateStateControlMixin, Debate
             camp_function = str(analysis.get("camp_function", "")).strip() or self.get_camp_function(speaker_id)
             side = str(analysis.get("proposition_stance", "")).strip() or self.get_agent_side(speaker_id)
             for index, unit in enumerate(claim_units[:2]):
-                text = str(unit.get("text", ""))[:120] or str(content).strip()[:120]
-                terms = [str(term) for term in unit.get("terms", [])][:5]
-                duplicate_subquestion_id = self._find_matching_open_subquestion(
-                    target_agent_id=target_agent,
-                    text=text,
-                    terms=terms,
-                )
-                if duplicate_subquestion_id:
-                    existing = self.subquestions.get(duplicate_subquestion_id)
-                    if existing:
-                        existing["duplicate_count"] = int(existing.get("duplicate_count") or 1) + 1
-                        existing["last_referenced_post_id"] = post_id
-                        if camp_function and not existing.get("camp_function"):
-                            existing["camp_function"] = camp_function
-                        if side and not existing.get("side"):
-                            existing["side"] = side
-                        if int(existing.get("duplicate_count") or 1) >= 2:
-                            self.alerts.add("camp_reassert")
-                    continue
                 subquestion_id = f"sq:{post_id}:{index}"
                 self.subquestions[subquestion_id] = {
                     "subquestion_id": subquestion_id,
-                    "text": text,
-                    "terms": terms,
+                    "text": str(unit.get("text", ""))[:120] or str(content).strip()[:120],
+                    "terms": [str(term) for term in unit.get("terms", [])][:5],
                     "post_id": post_id,
                     "target_agent_id": target_agent,
                     "speaker_id": speaker_id,
@@ -278,7 +258,6 @@ class DebateState(DebateStateSerializationMixin, DebateStateControlMixin, Debate
                     "side": side,
                     "status": "open",
                     "created_post_id": post_id,
-                    "duplicate_count": 1,
                 }
                 self.subquestion_order.append(subquestion_id)
                 if len(self.subquestion_order) > 40:
@@ -344,50 +323,6 @@ class DebateState(DebateStateSerializationMixin, DebateStateControlMixin, Debate
                 continue
             mirrored.append((attacker_id, str(claim.get("snippet", ""))[:60], target_agent_id))
         self.open_attacks = mirrored[-8:]
-
-    def _normalize_subquestion_terms(self, text: str, terms: list[str]) -> list[str]:
-        normalized: list[str] = []
-        for raw in [*terms, *CONTRACT_TOKEN_PATTERN.findall(text or "")]:
-            token = str(raw).strip().lower()
-            if len(token) < 2 or token in normalized:
-                continue
-            normalized.append(token)
-        return normalized[:6]
-
-    def _find_matching_open_subquestion(
-        self,
-        *,
-        target_agent_id: str,
-        text: str,
-        terms: list[str],
-    ) -> str | None:
-        candidate_terms = set(self._normalize_subquestion_terms(text, terms))
-        candidate_text = str(text).strip()
-        if not candidate_terms and not candidate_text:
-            return None
-
-        for subquestion_id in reversed(self.subquestion_order[-12:]):
-            subquestion = self.subquestions.get(subquestion_id)
-            if not subquestion or subquestion.get("status") != "open":
-                continue
-            if str(subquestion.get("target_agent_id", "")).strip() != target_agent_id:
-                continue
-
-            existing_terms = set(
-                self._normalize_subquestion_terms(
-                    str(subquestion.get("text", "")),
-                    [str(term) for term in subquestion.get("terms", [])],
-                )
-            )
-            if candidate_terms and existing_terms:
-                overlap = len(candidate_terms & existing_terms) / max(min(len(candidate_terms), len(existing_terms)), 1)
-                if overlap >= 0.6:
-                    return subquestion_id
-
-            existing_text = str(subquestion.get("text", "")).strip()
-            if candidate_text and existing_text and candidate_text[:80] == existing_text[:80]:
-                return subquestion_id
-        return None
 
     def _update_internal_states(self, speaker_id: str, target_id: str | None) -> None:
         if not target_id:
