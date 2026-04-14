@@ -72,20 +72,6 @@
     }
   ],
   "debate_function_preference": "differentiate",
-  "persona_anchors": {
-    "required_concepts": [
-      "熟議",
-      "連合形成",
-      "漸進改革",
-      "多元的愛国",
-      "国際協調"
-    ],
-    "forbidden_generics": [
-      "リベラル一般",
-      "民主主義一般",
-      "対話一般"
-    ]
-  },
   "forbidden_patterns": [
     "現代の差別的属性への直接攻撃",
     "犯罪や暴力の助長",

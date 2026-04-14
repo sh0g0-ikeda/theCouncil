@@ -69,7 +69,6 @@ _TOPIC_STOPWORDS = {
     "that",
     "this",
 }
-_PHASE1_DEFINITION_POST_LIMIT = 3
 
 
 @dataclass(slots=True)
@@ -562,16 +561,6 @@ def validate_generated_reply(reply: dict[str, Any], context: dict[str, Any]) -> 
     stance = str(reply.get("stance", "disagree"))
     recent_axes = [str(axis) for axis in context.get("agent_recent_axes", [])]
     target_post = context.get("target_post", {}) or {}
-    debate_post_count = int(context.get("debate_post_count", 999))
-    abstract_terms = [str(t) for t in context.get("abstract_terms", []) if str(t).strip()]
-    pending_abstract = [t for t in abstract_terms if t not in {str(v) for v in context.get("resolved_abstract_terms", [])}]
-
-    if (
-        debate_post_count <= _PHASE1_DEFINITION_POST_LIMIT
-        and analysis.effective_function not in {"define", "differentiate", "facilitate"}
-        and pending_abstract
-    ):
-        return ValidationResult(False, f"phase1_definition_required: define {' / '.join(pending_abstract[:2])} first.", analysis)
 
     forced_axis = str(context.get("forced_axis", "")).strip()
     if forced_axis and analysis.effective_axis != forced_axis:
@@ -655,6 +644,17 @@ def validate_generated_reply(reply: dict[str, Any], context: dict[str, Any]) -> 
         if not _check_persona_anchor(str(reply.get("content", "")), persona):
             req = persona.get("persona_anchors", {}).get("required_concepts", [])
             return ValidationResult(False, f"Use at least one of your required concepts: {', '.join(req[:3])}.", analysis)
+
+    # Phase 1 definition check: non-define functions blocked when abstract_terms need definition
+    debate_post_count = int(context.get("debate_post_count", 999))
+    abstract_terms = [str(t) for t in context.get("abstract_terms", []) if str(t).strip()]
+    pending_abstract = [t for t in abstract_terms if t not in {str(v) for v in context.get("resolved_abstract_terms", [])}]
+    if (
+        debate_post_count <= 2
+        and analysis.effective_function not in {"define", "differentiate", "facilitate"}
+        and pending_abstract
+    ):
+        return ValidationResult(False, f"phase1_definition_required: define {' / '.join(pending_abstract[:2])} first.", analysis)
 
     # Conclusion repetition check: if current conclusion >= 80% similar to last 3 conclusions from same agent
     current_conclusion = str(analysis.claim_structure.get("conclusion", "")).strip()

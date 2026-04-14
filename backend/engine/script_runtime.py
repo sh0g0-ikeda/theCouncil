@@ -3,32 +3,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
+from collections.abc import Awaitable, Callable
 
 from db.client import DatabaseClient
-from engine.debate_state import DebateState
-from engine.discussion_policy import (
-    _build_conversation_summary,
-    _determine_retrieval_mode,
-    _extract_abstract_nouns,
-    _get_phase,
-    _is_missing_debate_state_error,
-    _sanitize_topic_axes,
-    seed_subquestions,
-)
-from engine.llm import (
-    LLMGenerationError,
-    assign_debate_frame,
-    build_script_post_messages,
-    call_llm,
-    decompose_topic_axes,
-    generate_debate_script,
-    validate_reply_length,
-)
+from engine.discussion_policy import _get_phase
+from engine.llm import LLMGenerationError, build_script_post_messages, call_llm, generate_debate_script
 from engine.rag import retrieve_chunks
-from engine.validator import summarize_target_claim, validate_generated_reply
 from models.agent import Agent
 
 logger = logging.getLogger(__name__)
@@ -56,7 +38,6 @@ class ScriptRuntimeState:
     script_turn_index: int = 0
     turn_fail_counts: dict[int, int] = field(default_factory=dict)
     initial_load_done: bool = False
-    debate_state: DebateState | None = None
 
 
 class ScriptedDiscussionRunner:
@@ -73,7 +54,6 @@ class ScriptedDiscussionRunner:
         self.agents = agents
         self.push_fn = push_fn
         self.state = ScriptRuntimeState()
-        self._debate_state_table_missing = False
 
     async def run(self) -> None:
         logger.info("run_discussion started for thread=%s", self.thread_id)
@@ -102,7 +82,7 @@ class ScriptedDiscussionRunner:
                     break
 
                 self._refresh_user_reply_state(posts)
-                resolved = await self._resolve_turn(thread, posts)
+                resolved = self._resolve_turn(thread, posts)
                 if resolved is None:
                     continue
 
@@ -143,68 +123,6 @@ class ScriptedDiscussionRunner:
         await asyncio.sleep(5)
         return False
 
-    async def _ensure_debate_state(self, thread: dict[str, Any]) -> DebateState:
-        if self.state.debate_state is not None:
-            return self.state.debate_state
-
-        saved_state: dict[str, Any] | None = None
-        if not self._debate_state_table_missing:
-            try:
-                saved_state = await self.db.load_debate_state(self.thread_id)
-            except Exception as exc:
-                if _is_missing_debate_state_error(exc):
-                    self._debate_state_table_missing = True
-                else:
-                    raise
-
-        if saved_state:
-            self.state.debate_state = DebateState.from_dict(saved_state)
-            return self.state.debate_state
-
-        debate = DebateState()
-        topic_axes = _sanitize_topic_axes(
-            await decompose_topic_axes(thread["topic"]),
-            thread["topic"],
-            thread.get("topic_tags", []),
-        )
-        debate.set_topic_axes(topic_axes)
-        debate.thread_subquestions = seed_subquestions(thread["topic"])
-        debate.abstract_terms = _extract_abstract_nouns(thread["topic"], max_nouns=6)
-        for term in debate.abstract_terms:
-            debate.definition_requests.setdefault(
-                term,
-                {
-                    "status": "open",
-                    "requested_post_id": 0,
-                    "requested_by": "thread_seed",
-                    "target_agent_id": None,
-                    "created_post_id": 0,
-                    "answered_post_id": None,
-                    "answered_by": None,
-                },
-            )
-
-        agent_list = [self.agents[aid].persona for aid in thread["agent_ids"] if aid in self.agents]
-        frame_payload = await assign_debate_frame(thread["topic"], agent_list)
-        debate.set_debate_frame(
-            dict(frame_payload.get("frame") or {}),
-            {str(agent_id): dict(payload) for agent_id, payload in dict(frame_payload.get("assignments") or {}).items()},
-        )
-        self.state.debate_state = debate
-        await self._save_debate_state_if_possible(debate)
-        return debate
-
-    async def _save_debate_state_if_possible(self, debate: DebateState) -> None:
-        if self._debate_state_table_missing:
-            return
-        try:
-            await self.db.save_debate_state(self.thread_id, debate.to_dict())
-        except Exception as exc:
-            if _is_missing_debate_state_error(exc):
-                self._debate_state_table_missing = True
-                return
-            raise
-
     def _refresh_user_reply_state(self, posts: list[dict[str, Any]]) -> None:
         for post in posts:
             if (
@@ -216,8 +134,7 @@ class ScriptedDiscussionRunner:
                 self.state.last_user_post_id = post["id"]
                 self.state.user_reply_pending = 2
 
-    async def _resolve_turn(self, thread: dict[str, Any], posts: list[dict[str, Any]]) -> ResolvedTurn | None:
-        debate = await self._ensure_debate_state(thread)
+    def _resolve_turn(self, thread: dict[str, Any], posts: list[dict[str, Any]]) -> ResolvedTurn | None:
         ai_posts = [post for post in posts if post.get("agent_id")]
         is_user_reply_turn = self.state.user_reply_pending > 0
 
@@ -238,10 +155,10 @@ class ScriptedDiscussionRunner:
             return ResolvedTurn(
                 speaker_id=speaker_id,
                 target_post=target_post,
-                directive="Respond to the user directly, answer the strongest confusion, and summarize the current fault line.",
+                directive="ユーザーの発言に対して、あなたの立場から挑発的に反論せよ。相手の前提を崩し、論点を鋭く絞り込め",
                 move_type="counter",
                 phase=_get_phase(len(posts)),
-                assigned_side=debate.get_agent_side(speaker_id),
+                assigned_side="",
                 is_user_reply_turn=True,
             )
 
@@ -277,175 +194,15 @@ class ScriptedDiscussionRunner:
         else:
             target_post = None
 
-        assigned_side = str(turn.get("assigned_side", "")).strip() or debate.get_agent_side(speaker_id)
         return ResolvedTurn(
             speaker_id=speaker_id,
             target_post=target_post,
-            directive=str(turn.get("directive", "Answer the core claim directly and move the debate forward.")),
+            directive=str(turn.get("directive", "相手の主張に挑発的に反論せよ。前提の弱点を一点だけ突け")),
             move_type=str(turn.get("move_type", "attack")),
             phase=int(turn.get("phase", _get_phase(len(posts)))),
-            assigned_side=assigned_side,
+            assigned_side=str(turn.get("assigned_side", "")),
             is_user_reply_turn=False,
         )
-
-    def _required_response_kind(self, move_type: str, is_user_reply_turn: bool) -> str:
-        if is_user_reply_turn:
-            return "synthesize"
-        mapping = {
-            "opening_statement": "define",
-            "counter_definition": "differentiate",
-            "definition_rewrite": "define",
-            "attack": "attack",
-            "counter": "attack",
-            "expose_contradiction": "attack",
-            "condition_squeeze": "attack",
-            "reframe": "differentiate",
-            "steelman_and_break": "steelman",
-            "concretize": "concretize",
-            "new_evidence": "concretize",
-            "compression": "synthesize",
-            "final_verdict": "synthesize",
-        }
-        return mapping.get(move_type, "attack")
-
-    def _definition_seed_required_kind(
-        self,
-        posts: list[dict[str, Any]],
-        debate: DebateState,
-        speaker_id: str,
-        is_user_reply_turn: bool,
-        target_post: dict[str, Any] | None,
-    ) -> str:
-        if is_user_reply_turn:
-            return ""
-        ai_post_count = len([post for post in posts if post.get("agent_id")])
-        if ai_post_count >= 4:
-            return ""
-        if not debate.get_unresolved_terms():
-            return ""
-        if debate.has_pending_definition_response(speaker_id) and target_post and target_post.get("content"):
-            return "differentiate"
-        return "define"
-
-    def _resolve_required_response_kind(
-        self,
-        posts: list[dict[str, Any]],
-        debate: DebateState,
-        resolved: ResolvedTurn,
-    ) -> str:
-        definition_seed_kind = self._definition_seed_required_kind(
-            posts,
-            debate,
-            resolved.speaker_id,
-            resolved.is_user_reply_turn,
-            resolved.target_post,
-        )
-        if definition_seed_kind:
-            return definition_seed_kind
-        return self._required_response_kind(resolved.move_type, resolved.is_user_reply_turn)
-
-    def _resolved_abstract_terms(self, debate: DebateState) -> list[str]:
-        return sorted(
-            term for term, payload in debate.definition_requests.items()
-            if payload.get("status") == "answered"
-        )
-
-    def _camp_map_summary(self, thread: dict[str, Any], debate: DebateState) -> str:
-        parts: list[str] = []
-        for agent_id in thread["agent_ids"]:
-            if agent_id not in self.agents:
-                continue
-            side = debate.get_agent_side(agent_id) or "unassigned"
-            camp_function = debate.get_camp_function(agent_id) or "general"
-            parts.append(f"{self.agents[agent_id].display_name}:{side}/{camp_function}")
-        return " | ".join(parts[:8])
-
-    def _recent_agent_conclusions(self, debate: DebateState, speaker_id: str) -> list[str]:
-        conclusions: list[str] = []
-        for entry in reversed(debate.open_claim_structures[-12:]):
-            if entry.get("agent_id") != speaker_id:
-                continue
-            structure = dict(entry.get("structure") or {})
-            conclusion = str(structure.get("conclusion", "")).strip()
-            if conclusion:
-                conclusions.append(conclusion)
-            if len(conclusions) >= 3:
-                break
-        conclusions.reverse()
-        return conclusions
-
-    def _build_generation_context(
-        self,
-        thread: dict[str, Any],
-        posts: list[dict[str, Any]],
-        resolved: ResolvedTurn,
-        debate: DebateState,
-    ) -> dict[str, Any]:
-        persona = self.agents[resolved.speaker_id].persona
-        target_post = resolved.target_post or {}
-        debate_frame = debate.get_debate_frame()
-        assigned_side = resolved.assigned_side or debate.get_agent_side(resolved.speaker_id)
-        assigned_side = "conditional" if assigned_side == "neutral" else assigned_side
-        assigned_side_label = str(
-            debate_frame.get(f"{assigned_side}_label", "") if assigned_side else ""
-        ).strip() or assigned_side
-        opposing_side = debate.get_opposing_side(resolved.speaker_id)
-        opposing_side_label = str(
-            debate_frame.get(f"{opposing_side}_label", "") if opposing_side else ""
-        ).strip()
-        required_kind = self._resolve_required_response_kind(posts, debate, resolved)
-        priority_subquestion = debate.get_priority_subquestion_for(resolved.speaker_id) or {}
-        focus_axis = str(target_post.get("focus_axis", "")).strip()
-        if not focus_axis:
-            axes = debate.topic_axes or thread.get("topic_tags", [])
-            focus_axis = str(axes[0] if axes else "rationalism")
-        position_anchor = debate.get_position_anchor(resolved.speaker_id)
-
-        return {
-            "persona": persona,
-            "thread_topic": thread["topic"],
-            "conversation_summary": _build_conversation_summary("", posts[-10:]),
-            "target_post": target_post,
-            "target_debate_role": debate.get_debate_role(target_post.get("agent_id")),
-            "target_side": debate.get_agent_side(target_post.get("agent_id")),
-            "current_tags": thread.get("topic_tags", []),
-            "topic_axes": debate.topic_axes or thread.get("topic_tags", []),
-            "thread_subquestions": list(debate.thread_subquestions),
-            "abstract_terms": list(debate.abstract_terms),
-            "resolved_abstract_terms": self._resolved_abstract_terms(debate),
-            "conflict_axis": focus_axis,
-            "debate_function": required_kind,
-            "required_response_kind": required_kind,
-            "assigned_side": assigned_side,
-            "assigned_side_label": assigned_side_label,
-            "opposing_side_label": opposing_side_label,
-            "side_contract": debate.get_side_contract(resolved.speaker_id).get("thesis", ""),
-            "frame_proposition": str(debate_frame.get("proposition", "")).strip(),
-            "support_label": str(debate_frame.get("support_label", "")).strip(),
-            "oppose_label": str(debate_frame.get("oppose_label", "")).strip(),
-            "support_thesis": str(debate_frame.get("support_thesis", "")).strip(),
-            "oppose_thesis": str(debate_frame.get("oppose_thesis", "")).strip(),
-            "assigned_camp_function": debate.get_camp_function(resolved.speaker_id),
-            "required_subquestion_id": str(priority_subquestion.get("subquestion_id", "")).strip(),
-            "required_subquestion_text": str(priority_subquestion.get("text", "")).strip(),
-            "pending_definition_terms": debate.get_unresolved_terms(),
-            "recent_argument_fingerprints": list(debate.recent_argument_fingerprints[-6:]),
-            "forbidden_example_keys": list(debate.recent_example_keys[-4:]),
-            "required_concepts": list((persona.get("persona_anchors") or {}).get("required_concepts", [])),
-            "position_anchor_summary": str(position_anchor.get("summary", "")).strip(),
-            "position_anchor_terms": list(position_anchor.get("terms", [])),
-            "camp_map_summary": self._camp_map_summary(thread, debate),
-            "target_claim_summary": summarize_target_claim(target_post, focus_axis),
-            "target_claim_units": debate.get_claim_units_for_post(target_post.get("id")),
-            "recent_agent_conclusions": self._recent_agent_conclusions(debate, resolved.speaker_id),
-            "agent_recent_axes": debate.get_agent_recent_axes(resolved.speaker_id),
-            "debate_role": debate.get_debate_role(resolved.speaker_id),
-            "available_arsenal": debate.get_available_arsenal(resolved.speaker_id, persona),
-            "debate_post_count": len([post for post in posts if post.get("agent_id")]),
-            "is_first_post": not any(post.get("agent_id") == resolved.speaker_id for post in posts),
-            "role": debate.get_debate_role(resolved.speaker_id),
-            "meta_intervention_kind": "summarize" if resolved.is_user_reply_turn else "",
-        }
 
     async def _generate_reply(
         self,
@@ -453,84 +210,39 @@ class ScriptedDiscussionRunner:
         posts: list[dict[str, Any]],
         resolved: ResolvedTurn,
     ) -> dict[str, Any] | None:
-        debate = await self._ensure_debate_state(thread)
-        context = self._build_generation_context(thread, posts, resolved, debate)
-        rag_mode = _determine_retrieval_mode(
-            str(context.get("debate_function", "")),
-            list(context.get("pending_definition_terms", [])),
-            "",
-        )
         rag_context = {
             "thread_topic": thread["topic"],
-            "conflict_axis": str(context.get("conflict_axis", resolved.directive[:40])),
+            "conflict_axis": resolved.directive[:40],
             "current_tags": thread.get("topic_tags", []),
             "target_post": resolved.target_post or {},
-            "debate_function": str(context.get("debate_function", "")),
-            "retrieval_mode": rag_mode,
         }
-        rag_chunks = retrieve_chunks(resolved.speaker_id, rag_context, retrieval_mode=rag_mode)
-
-        retry_hint: str | None = None
-        for _attempt in range(2):
-            messages = build_script_post_messages(
-                persona=self.agents[resolved.speaker_id].persona,
-                directive=resolved.directive,
-                move_type=resolved.move_type,
-                target_post=resolved.target_post or {},
-                recent_posts=posts[-6:],
-                rag_chunks=rag_chunks,
-                thread_topic=thread["topic"],
-                phase=resolved.phase,
-                assigned_side=resolved.assigned_side,
-                assigned_side_label=str(context.get("assigned_side_label", "")),
-                opposing_side_label=str(context.get("opposing_side_label", "")),
-                side_contract=str(context.get("side_contract", "")),
-                frame_proposition=str(context.get("frame_proposition", "")),
-                assigned_camp_function=str(context.get("assigned_camp_function", "")),
-                required_subquestion_id=str(context.get("required_subquestion_id", "")),
-                required_subquestion_text=str(context.get("required_subquestion_text", "")),
-                pending_definition_terms=list(context.get("pending_definition_terms", [])),
-                topic_axes=list(context.get("topic_axes", [])),
-                recent_argument_fingerprints=list(context.get("recent_argument_fingerprints", [])),
-                forbidden_example_keys=list(context.get("forbidden_example_keys", [])),
-                required_concepts=list(context.get("required_concepts", [])),
-                required_response_kind=str(context.get("required_response_kind", "")),
-                retry_hint=retry_hint,
-                target_claim_summary=str(context.get("target_claim_summary", "")),
-                camp_map_summary=str(context.get("camp_map_summary", "")),
-                abstract_terms=list(context.get("abstract_terms", [])),
-                resolved_abstract_terms=list(context.get("resolved_abstract_terms", [])),
-                recent_agent_conclusions=list(context.get("recent_agent_conclusions", [])),
-                position_anchor_summary=str(context.get("position_anchor_summary", "")),
-            )
-            try:
-                reply = await call_llm(messages)
-            except LLMGenerationError:
-                retry_hint = "Return valid JSON with the requested stance and semantic fields."
-                continue
-
-            if not validate_reply_length(reply.get("content", "")):
-                retry_hint = "Keep the reply between 100 and 220 Japanese characters."
-                continue
-
-            validation = validate_generated_reply(reply, context)
-            if validation.ok:
-                reply["_semantic_analysis"] = validation.analysis.as_dict()
-                return reply
-            retry_hint = validation.retry_hint
-
-        logger.warning(
-            "LLM failed for thread=%s turn=%d speaker=%s",
-            self.thread_id,
-            self.state.script_turn_index,
-            resolved.speaker_id,
+        rag_chunks = retrieve_chunks(resolved.speaker_id, rag_context)
+        messages = build_script_post_messages(
+            persona=self.agents[resolved.speaker_id].persona,
+            directive=resolved.directive,
+            move_type=resolved.move_type,
+            target_post=resolved.target_post or {},
+            recent_posts=posts[-6:],
+            rag_chunks=rag_chunks,
+            thread_topic=thread["topic"],
+            phase=resolved.phase,
+            assigned_side=resolved.assigned_side,
         )
-        if not resolved.is_user_reply_turn:
-            self.state.turn_fail_counts[self.state.script_turn_index] = (
-                self.state.turn_fail_counts.get(self.state.script_turn_index, 0) + 1
+        try:
+            return await call_llm(messages)
+        except LLMGenerationError:
+            logger.warning(
+                "LLM failed for thread=%s turn=%d speaker=%s",
+                self.thread_id,
+                self.state.script_turn_index,
+                resolved.speaker_id,
             )
-        await asyncio.sleep(1)
-        return None
+            if not resolved.is_user_reply_turn:
+                self.state.turn_fail_counts[self.state.script_turn_index] = (
+                    self.state.turn_fail_counts.get(self.state.script_turn_index, 0) + 1
+                )
+            await asyncio.sleep(1)
+            return None
 
     async def _persist_reply(
         self,
@@ -539,7 +251,6 @@ class ScriptedDiscussionRunner:
         resolved: ResolvedTurn,
         reply: dict[str, Any],
     ) -> None:
-        debate = await self._ensure_debate_state(thread)
         phase_for_db = _get_phase(len(posts))
         if phase_for_db != thread.get("current_phase"):
             await self.db.update_thread_phase(self.thread_id, phase_for_db)
@@ -550,26 +261,11 @@ class ScriptedDiscussionRunner:
             {
                 "reply_to": resolved.target_post["id"] if resolved.target_post else None,
                 "content": reply["content"],
-                "stance": reply.get("local_stance_to_target") or reply.get("stance", "disagree"),
+                "stance": reply.get("stance", "disagree"),
                 "focus_axis": reply.get("main_axis", "rationalism"),
             },
             token_usage=int(reply.get("_token_usage", 0)),
         )
-        analysis = dict(reply.get("_semantic_analysis") or {})
-        effective_debate_function = self._resolve_required_response_kind(posts, debate, resolved)
-        debate.record_post(
-            resolved.speaker_id,
-            resolved.target_post or {},
-            str(reply.get("main_axis", "")).strip() or str((resolved.target_post or {}).get("focus_axis", "")),
-            debate_function=effective_debate_function,
-            used_arsenal_id=reply.get("used_arsenal_id"),
-            stance=str(reply.get("local_stance_to_target") or reply.get("stance") or "disagree"),
-            post_id=int(post.get("id") or 0),
-            analysis=analysis,
-            content=str(reply.get("content", "")),
-        )
-        debate.age_obligations(int(post.get("id") or 0))
-        await self._save_debate_state_if_possible(debate)
         self.state.event_counter += 1
         await self.push_fn(self.thread_id, post)
 

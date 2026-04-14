@@ -181,29 +181,6 @@ def test_validate_generated_reply_requires_explicit_proposition_stance() -> None
     assert "proposition_stance" in result.retry_hint
 
 
-def test_validate_generated_reply_keeps_phase1_definition_first_through_fourth_ai_post() -> None:
-    result = validate_generated_reply(
-        {
-            "main_axis": "totalitarianism",
-            "content": "Strong executive coordination can stabilize crisis response faster than fragmented procedures.",
-            "stance": "disagree",
-            "local_stance_to_target": "disagree",
-            "proposition_stance": "support",
-            "camp_function": "state_capacity",
-        },
-        {
-            "target_post": {"id": 3, "content": "Totalitarianism destroys plurality and public freedom."},
-            "conflict_axis": "totalitarianism",
-            "debate_post_count": 3,
-            "abstract_terms": ["totalitarianism", "freedom"],
-            "pending_definition_terms": ["totalitarianism", "freedom"],
-        },
-    )
-
-    assert result.ok is False
-    assert "phase1_definition_required" in result.retry_hint
-
-
 def test_validate_generated_reply_rejects_wrong_camp_function() -> None:
     result = validate_generated_reply(
         {

@@ -73,20 +73,6 @@
     }
   ],
   "debate_function_preference": "differentiate",
-  "persona_anchors": {
-    "required_concepts": [
-      "複利",
-      "経済的な堀",
-      "能力の輪",
-      "気質",
-      "オーナー"
-    ],
-    "forbidden_generics": [
-      "投資一般",
-      "金儲け一般",
-      "市場一般"
-    ]
-  },
   "forbidden_patterns": [
     "現代の差別的属性への直接攻撃",
     "犯罪や暴力の助長",

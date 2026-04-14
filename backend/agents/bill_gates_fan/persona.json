@@ -73,20 +73,6 @@
     }
   ],
   "debate_function_preference": "differentiate",
-  "persona_anchors": {
-    "required_concepts": [
-      "プラットフォーム",
-      "ソフトウェア",
-      "公共財",
-      "実装",
-      "現実主義"
-    ],
-    "forbidden_generics": [
-      "成長一般",
-      "慈善一般",
-      "技術一般"
-    ]
-  },
   "forbidden_patterns": [
     "現代の差別的属性への直接攻撃",
     "犯罪や暴力の助長",

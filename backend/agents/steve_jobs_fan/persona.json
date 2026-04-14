@@ -73,20 +73,6 @@
     }
   ],
   "debate_function_preference": "attack",
-  "persona_anchors": {
-    "required_concepts": [
-      "エンドツーエンド",
-      "フォーカス",
-      "道具としての技術",
-      "プロダクト物語",
-      "クラフト"
-    ],
-    "forbidden_generics": [
-      "デザイン一般",
-      "起業一般",
-      "技術一般"
-    ]
-  },
   "forbidden_patterns": [
     "現代の差別的属性への直接攻撃",
     "犯罪や暴力の助長",

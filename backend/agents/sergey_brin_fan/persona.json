@@ -73,20 +73,6 @@
     }
   ],
   "debate_function_preference": "differentiate",
-  "persona_anchors": {
-    "required_concepts": [
-      "研究文化",
-      "実験",
-      "好奇心",
-      "ムーンショット",
-      "探索"
-    ],
-    "forbidden_generics": [
-      "AI一般",
-      "研究一般",
-      "科学一般"
-    ]
-  },
   "forbidden_patterns": [
     "現代の差別的属性への直接攻撃",
     "犯罪や暴力の助長",

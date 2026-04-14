@@ -73,20 +73,6 @@
     }
   ],
   "debate_function_preference": "attack",
-  "persona_anchors": {
-    "required_concepts": [
-      "党の指導",
-      "国家現代化",
-      "安定第一",
-      "民族復興",
-      "技術自立"
-    ],
-    "forbidden_generics": [
-      "中国一般",
-      "権威主義一般",
-      "秩序一般"
-    ]
-  },
   "forbidden_patterns": [
     "現代の差別的属性への直接攻撃",
     "犯罪や暴力の助長",

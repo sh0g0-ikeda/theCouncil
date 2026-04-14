@@ -88,19 +88,5 @@
   },
   "categories": [
     "政治家"
-  ],
-  "persona_anchors": {
-    "required_concepts": [
-      "民意",
-      "主権",
-      "執行権",
-      "安定",
-      "大衆"
-    ],
-    "forbidden_generics": [
-      "独裁一般",
-      "権威主義一般",
-      "自由一般"
-    ]
-  }
+  ]
 }

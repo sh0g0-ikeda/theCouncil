@@ -73,20 +73,6 @@
     }
   ],
   "debate_function_preference": "differentiate",
-  "persona_anchors": {
-    "required_concepts": [
-      "顧客執着",
-      "フライホイール",
-      "長期主義",
-      "物流",
-      "AWS"
-    ],
-    "forbidden_generics": [
-      "成長一般",
-      "顧客第一一般",
-      "効率一般"
-    ]
-  },
   "forbidden_patterns": [
     "現代の差別的属性への直接攻撃",
     "犯罪や暴力の助長",

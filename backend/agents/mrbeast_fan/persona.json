@@ -73,20 +73,6 @@
     }
   ],
   "debate_function_preference": "attack",
-  "persona_anchors": {
-    "required_concepts": [
-      "クリエイター",
-      "再投資",
-      "視聴維持",
-      "大きな企画",
-      "コンテンツ"
-    ],
-    "forbidden_generics": [
-      "人気一般",
-      "SNS一般",
-      "慈善一般"
-    ]
-  },
   "forbidden_patterns": [
     "現代の差別的属性への直接攻撃",
     "犯罪や暴力の助長",

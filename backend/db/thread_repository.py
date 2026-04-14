@@ -1,31 +1,9 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
 from typing import Any
 
 from db.shared import row_to_dict
-
-
-def _coerce_state_json(raw: Any) -> dict[str, Any] | None:
-    if raw is None:
-        return None
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, str):
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            return None
-        return parsed if isinstance(parsed, dict) else None
-    if isinstance(raw, Mapping):
-        return dict(raw)
-    return None
-
-
-def _is_missing_relation_error(exc: Exception, relation_name: str) -> bool:
-    text = str(exc).lower()
-    return "42p01" in text or f'relation "{relation_name.lower()}" does not exist' in text
 
 
 class ThreadRepositoryMixin:
@@ -344,50 +322,35 @@ class ThreadRepositoryMixin:
     async def fetch_thread_votes(self, thread_id: str) -> dict[str, Any]:
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
-            try:
-                rows = await conn.fetch(
-                    "SELECT agent_id, COUNT(*) AS cnt FROM thread_votes WHERE thread_id = $1 GROUP BY agent_id",
-                    thread_id,
-                )
-            except Exception as exc:
-                if _is_missing_relation_error(exc, "thread_votes"):
-                    return {}
-                raise
+            rows = await conn.fetch(
+                "SELECT agent_id, COUNT(*) AS cnt FROM thread_votes WHERE thread_id = $1 GROUP BY agent_id",
+                thread_id,
+            )
         return {str(row["agent_id"]): int(row["cnt"]) for row in rows}
 
     async def fetch_user_thread_vote(self, thread_id: str, user_id: str) -> str | None:
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
-            try:
-                val = await conn.fetchval(
-                    "SELECT agent_id FROM thread_votes WHERE thread_id = $1 AND user_id = $2",
-                    thread_id,
-                    user_id,
-                )
-            except Exception as exc:
-                if _is_missing_relation_error(exc, "thread_votes"):
-                    return None
-                raise
+            val = await conn.fetchval(
+                "SELECT agent_id FROM thread_votes WHERE thread_id = $1 AND user_id = $2",
+                thread_id,
+                user_id,
+            )
         return str(val) if val else None
 
     async def upsert_thread_vote(self, thread_id: str, user_id: str, agent_id: str) -> None:
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
-            try:
-                await conn.execute(
-                    """
-                    INSERT INTO thread_votes (thread_id, user_id, agent_id)
-                    VALUES ($1, $2, $3)
-                    ON CONFLICT (thread_id, user_id) DO UPDATE SET agent_id = EXCLUDED.agent_id, created_at = NOW()
-                    """,
-                    thread_id,
-                    user_id,
-                    agent_id,
-                )
-            except Exception as exc:
-                if _is_missing_relation_error(exc, "thread_votes"):
-                    raise ValueError("thread_votes_unavailable") from exc
-                raise
+            await conn.execute(
+                """
+                INSERT INTO thread_votes (thread_id, user_id, agent_id)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (thread_id, user_id) DO UPDATE SET agent_id = EXCLUDED.agent_id, created_at = NOW()
+                """,
+                thread_id,
+                user_id,
+                agent_id,
+            )
 
     async def update_thread_speed(self, thread_id: str, mode: str) -> None:
         pool = await self._ensure_pool()
@@ -403,7 +366,8 @@ class ThreadRepositoryMixin:
             )
         if row is None:
             return None
-        return _coerce_state_json(row["state_json"])
+        raw = row["state_json"]
+        return dict(raw) if raw else None
 
     async def save_debate_state(self, thread_id: str, state: dict) -> None:
         pool = await self._ensure_pool()
