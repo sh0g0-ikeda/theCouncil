@@ -76,6 +76,73 @@ def test_build_generation_context_derives_turn_contract_from_priority_subquestio
     assert "判断基準" in context["turn_contract"]["required_labels"]
 
 
+def test_build_generation_context_does_not_require_definition_label_for_seed_turn() -> None:
+    runner = ScriptedDiscussionRunner(
+        thread_id="thread-1",
+        db=_FakeDb(),  # type: ignore[arg-type]
+        agents={"caesar": _make_agent("caesar", "Caesar")},
+        push_fn=lambda _thread_id, _payload: asyncio.sleep(0),
+    )
+    debate = DebateState()
+    debate.definition_requests["war"] = {
+        "status": "open",
+        "requested_post_id": 0,
+        "requested_by": "thread_seed",
+        "target_agent_id": None,
+        "created_post_id": 0,
+        "answered_post_id": None,
+        "answered_by": None,
+    }
+
+    context = runner._build_generation_context(
+        {"topic": "When is war justified?", "topic_tags": [], "agent_ids": ["caesar"]},
+        [],
+        runtime_module.ResolvedTurn(
+            speaker_id="caesar",
+            target_post={},
+            directive="",
+            move_type="opening_statement",
+            phase=1,
+            assigned_side="support",
+            is_user_reply_turn=False,
+        ),
+        debate,
+    )
+
+    assert context["required_response_kind"] == "define"
+    assert "war" in context["turn_contract"]["must_define_terms"]
+    assert "定義" not in context["turn_contract"]["required_labels"]
+
+
+def test_resolve_turn_resets_script_state_when_opening_turns_all_fail() -> None:
+    runner = ScriptedDiscussionRunner(
+        thread_id="thread-1",
+        db=_FakeDb(),  # type: ignore[arg-type]
+        agents={"caesar": _make_agent("caesar", "Caesar")},
+        push_fn=lambda _thread_id, _payload: asyncio.sleep(0),
+    )
+    runner.state.cached_script = {
+        "turns": [
+            {"agent_id": "caesar", "move_type": "opening_statement"},
+        ]
+    }
+    runner.state.script_turn_index = 1
+    runner.state.turn_fail_counts = {0: 3}
+    runner.state.debate_state = DebateState()
+
+    resolved = asyncio.run(
+        runner._resolve_turn(
+            {"topic": "When is war justified?", "topic_tags": [], "agent_ids": ["caesar"]},
+            [],
+        )
+    )
+
+    assert resolved is None
+    assert runner.state.cached_script is None
+    assert runner.state.script_turn_index == 0
+    assert runner.state.turn_fail_counts == {}
+
+
 def test_validate_generated_reply_requires_turn_contract_labels() -> None:
     result = validate_generated_reply(
         {
@@ -150,4 +217,3 @@ def test_validate_generated_reply_accepts_structured_turn_contract_answer() -> N
     )
 
     assert result.ok is True
-
