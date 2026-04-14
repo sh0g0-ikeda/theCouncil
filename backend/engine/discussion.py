@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
@@ -33,6 +34,7 @@ from models.agent import Agent, IdeologyVector
 
 agents: dict[str, Agent] = {}
 _discussion_tasks: dict[str, asyncio.Task[None]] = {}
+logger = logging.getLogger(__name__)
 
 # Priority semaphores: ultra=1 slot, pro=2 slots, free=3 slots (concurrent)
 # Lower priority number = fewer concurrent competitors = effectively faster
@@ -136,6 +138,7 @@ async def start_discussion(
     if task and not task.done():
         return
     priority = queue_priority(plan)
+    logger.info("start_discussion scheduling thread=%s plan=%s priority=%s", thread_id, plan, priority)
     task = asyncio.create_task(run_discussion(thread_id, push_fn, priority=priority))
     task.add_done_callback(lambda _: _discussion_tasks.pop(thread_id, None))
     _discussion_tasks[thread_id] = task

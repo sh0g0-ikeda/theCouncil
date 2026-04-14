@@ -59,6 +59,18 @@ def _fallback_role_assignments(agent_list: list[dict[str, Any]]) -> dict[str, st
     }
 
 
+def _script_generation_error(reason: str, detail: str) -> dict[str, Any]:
+    return {
+        "turns": [],
+        "status": "error",
+        "error": {
+            "stage": "script_generation",
+            "reason": reason,
+            "detail": detail,
+        },
+    }
+
+
 def _get_client() -> Any:
     global _client
     if AsyncOpenAI is None:
@@ -306,7 +318,9 @@ async def generate_debate_script(
 ) -> dict[str, Any]:
     """Generate a per-turn debate script using GPT-4o. Returns {} on failure."""
     if not _openai_enabled() or not agent_list:
-        return {}
+        if not _openai_enabled():
+            return _script_generation_error("openai_disabled", "OPENAI_API_KEY is not configured")
+        return _script_generation_error("no_agents", "No runtime agents were available for script generation")
 
     agent_lines = []
     for agent in agent_list:
@@ -455,10 +469,10 @@ async def generate_debate_script(
         )
         payload = _parse_json_payload(response.choices[0].message.content)
         if not isinstance(payload.get("turns"), list) or not payload["turns"]:
-            return {}
+            return _script_generation_error("empty_script", "Model returned no debate turns")
         return payload
-    except Exception:
-        return {}
+    except Exception as exc:
+        return _script_generation_error("openai_request_failed", str(exc))
 
 
 async def decompose_topic_axes(topic: str) -> list[str]:

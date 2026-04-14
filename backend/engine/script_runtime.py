@@ -111,7 +111,13 @@ class ScriptedDiscussionRunner:
             return True
 
         agent_list = [self.agents[aid].persona for aid in thread["agent_ids"] if aid in self.agents]
-        logger.info("Generating debate script for thread=%s", self.thread_id)
+        logger.info(
+            "Generating debate script for thread=%s topic=%r agents=%d runtime_agents=%d",
+            self.thread_id,
+            thread["topic"],
+            len(agent_list),
+            len(self.agents),
+        )
         generated = await generate_debate_script(thread["topic"], agent_list, thread["max_posts"])
         if generated.get("turns"):
             self.state.cached_script = generated
@@ -119,7 +125,16 @@ class ScriptedDiscussionRunner:
             logger.info("Script generated: %d turns for thread=%s", len(generated["turns"]), self.thread_id)
             return True
 
-        logger.warning("Script generation failed for thread=%s, retrying in 5s", self.thread_id)
+        error = generated.get("error") if isinstance(generated, dict) else None
+        if isinstance(generated, dict) and error:
+            self.state.cached_script = generated
+            await self.db.save_thread_script(self.thread_id, generated)
+        logger.warning(
+            "Script generation failed for thread=%s reason=%s detail=%r retrying_in=5s",
+            self.thread_id,
+            error.get("reason") if isinstance(error, dict) else "unknown",
+            error.get("detail") if isinstance(error, dict) else None,
+        )
         await asyncio.sleep(5)
         return False
 
