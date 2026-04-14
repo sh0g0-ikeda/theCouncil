@@ -49,6 +49,15 @@ class CheckoutRequest(BaseModel):
     cancel_url: str
 
 
+def _subscription_is_cancelable(subscription: Any) -> bool:
+    status = getattr(subscription, "status", None)
+    return status not in {"canceled", "incomplete_expired"}
+
+
+def _list_cancelable_subscriptions(subscriptions: Any) -> list[Any]:
+    return [sub for sub in getattr(subscriptions, "data", []) if _subscription_is_cancelable(sub)]
+
+
 @router.post("/checkout")
 async def create_checkout_session(
     body: CheckoutRequest,
@@ -95,6 +104,33 @@ async def create_checkout_session(
         }
     )
     return {"url": session.url}
+
+
+@router.post("/cancel")
+async def cancel_subscription(
+    user: RequestUser = Depends(require_user),
+    db: DatabaseClient = Depends(get_db),
+) -> dict[str, Any]:
+    user_record = await db.fetch_user(user.id)
+    if not user_record:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    current_plan = user_record.get("plan", "free")
+    if current_plan == "free":
+        return {"ok": True, "plan": "free"}
+
+    stripe_customer_id = user_record.get("stripe_customer_id")
+    if stripe_customer_id:
+        client = _stripe_client()
+        subscriptions = client.subscriptions.list(
+            params={"customer": stripe_customer_id, "status": "all", "limit": 20}
+        )
+        for subscription in _list_cancelable_subscriptions(subscriptions):
+            client.subscriptions.cancel(subscription.id)
+
+    await db.update_user_plan(user.id, "free")
+    logger.info("Subscription cancelled immediately for user %s -> free", user.id)
+    return {"ok": True, "plan": "free"}
 
 
 @router.get("/portal")

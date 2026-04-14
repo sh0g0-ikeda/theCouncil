@@ -84,6 +84,31 @@ export default function PricingPage() {
     }
   }
 
+  async function handleDowngradeToFree() {
+    if (!session?.user) {
+      router.push("/login");
+      return;
+    }
+    setLoading("free");
+    setError(null);
+    try {
+      const headers = sessionHeaders(session.user as any);
+      const res = await fetch(`${getApiBaseUrl()}/api/billing/cancel`, {
+        method: "POST",
+        headers: headers as Record<string, string>,
+      });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(payload.detail ?? "エラーが発生しました");
+      }
+      setCurrentPlan("free");
+    } catch (e: any) {
+      setError(e.message ?? "エラーが発生しました");
+    } finally {
+      setLoading(null);
+    }
+  }
+
   async function handlePortal() {
     if (!session?.user) return;
     setLoading("portal");
@@ -126,6 +151,7 @@ export default function PricingPage() {
         {PLANS.map((plan) => {
           const isCurrent = currentPlan === plan.id;
           const isPaid = plan.id !== "free";
+          const canDowngradeToFree = plan.id === "free" && currentPlan !== "free";
           return (
             <div
               key={plan.id}
@@ -155,6 +181,20 @@ export default function PricingPage() {
                 <div className="rounded-full border border-board-border py-2 text-center text-sm font-semibold text-board-muted">
                   現在のプラン
                 </div>
+              ) : canDowngradeToFree ? (
+                <div className="space-y-2">
+                  <button
+                    type="button"
+                    disabled={!!loading}
+                    onClick={handleDowngradeToFree}
+                    className="w-full rounded-full border border-board-border bg-white py-2 text-sm font-bold text-board-ink transition hover:bg-board-paper disabled:opacity-60"
+                  >
+                    {loading === "free" ? "処理中…" : "無料プランに戻す"}
+                  </button>
+                  <p className="text-xs leading-5 text-board-muted">
+                    Pro / Ultra から Free を押すと、その場で無料プランへ切り替わります。
+                  </p>
+                </div>
               ) : isPaid ? (
                 <button
                   type="button"
@@ -176,7 +216,7 @@ export default function PricingPage() {
 
       {currentPlan !== "free" && (
         <div className="rounded-2xl border border-board-border bg-board-paper p-4 text-sm text-board-muted">
-          <span>プランの変更・解約は </span>
+          <span>無料プランへの即時変更は上の Free から行えます。Free を押した時点で無料プランへ切り替わります。支払い方法の変更や請求履歴の確認は </span>
           <button
             type="button"
             onClick={handlePortal}
