@@ -317,14 +317,6 @@ class ScriptedDiscussionRunner:
             self.state.script_turn_index += 1
 
         if self.state.script_turn_index >= len(turns):
-            if not ai_posts:
-                logger.warning(
-                    "All script turns exhausted before any AI post was saved for thread=%s; resetting script state",
-                    self.thread_id,
-                )
-                self.state.cached_script = None
-                self.state.script_turn_index = 0
-                self.state.turn_fail_counts.clear()
             return None
 
         turn = turns[self.state.script_turn_index]
@@ -442,8 +434,6 @@ class ScriptedDiscussionRunner:
             contract["forbid_question_only"] = True
             contract["resolution_target"] = contract.get("resolution_target") or "answered"
             required_labels = _merge_unique_labels(required_labels, _required_labels_from_subquestion(subquestion_text))
-        elif required_kind in {"define", "differentiate"}:
-            required_labels = [label for label in required_labels if label != "定義"]
 
         if resolved.move_type in {"compression", "final_verdict"}:
             required_labels = _merge_unique_labels(required_labels, ["結論"])
