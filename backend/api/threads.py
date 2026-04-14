@@ -240,7 +240,12 @@ async def cast_vote(
         user,
         preferred_internal_user_id=access.actor.internal_user_id,
     )
-    await db.upsert_thread_vote(thread_id, internal_id, req.agent_id)
+    try:
+        await db.upsert_thread_vote(thread_id, internal_id, req.agent_id)
+    except ValueError as exc:
+        if str(exc) == "thread_votes_unavailable":
+            raise HTTPException(status_code=503, detail="Voting is temporarily unavailable") from exc
+        raise
     counts = await db.fetch_thread_votes(thread_id)
     return {"counts": counts, "my_vote": req.agent_id}
 

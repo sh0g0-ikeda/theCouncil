@@ -23,6 +23,11 @@ def _coerce_state_json(raw: Any) -> dict[str, Any] | None:
     return None
 
 
+def _is_missing_relation_error(exc: Exception, relation_name: str) -> bool:
+    text = str(exc).lower()
+    return "42p01" in text or f'relation "{relation_name.lower()}" does not exist' in text
+
+
 class ThreadRepositoryMixin:
     async def create_thread(
         self,
@@ -339,35 +344,50 @@ class ThreadRepositoryMixin:
     async def fetch_thread_votes(self, thread_id: str) -> dict[str, Any]:
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
-            rows = await conn.fetch(
-                "SELECT agent_id, COUNT(*) AS cnt FROM thread_votes WHERE thread_id = $1 GROUP BY agent_id",
-                thread_id,
-            )
+            try:
+                rows = await conn.fetch(
+                    "SELECT agent_id, COUNT(*) AS cnt FROM thread_votes WHERE thread_id = $1 GROUP BY agent_id",
+                    thread_id,
+                )
+            except Exception as exc:
+                if _is_missing_relation_error(exc, "thread_votes"):
+                    return {}
+                raise
         return {str(row["agent_id"]): int(row["cnt"]) for row in rows}
 
     async def fetch_user_thread_vote(self, thread_id: str, user_id: str) -> str | None:
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
-            val = await conn.fetchval(
-                "SELECT agent_id FROM thread_votes WHERE thread_id = $1 AND user_id = $2",
-                thread_id,
-                user_id,
-            )
+            try:
+                val = await conn.fetchval(
+                    "SELECT agent_id FROM thread_votes WHERE thread_id = $1 AND user_id = $2",
+                    thread_id,
+                    user_id,
+                )
+            except Exception as exc:
+                if _is_missing_relation_error(exc, "thread_votes"):
+                    return None
+                raise
         return str(val) if val else None
 
     async def upsert_thread_vote(self, thread_id: str, user_id: str, agent_id: str) -> None:
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
-            await conn.execute(
-                """
-                INSERT INTO thread_votes (thread_id, user_id, agent_id)
-                VALUES ($1, $2, $3)
-                ON CONFLICT (thread_id, user_id) DO UPDATE SET agent_id = EXCLUDED.agent_id, created_at = NOW()
-                """,
-                thread_id,
-                user_id,
-                agent_id,
-            )
+            try:
+                await conn.execute(
+                    """
+                    INSERT INTO thread_votes (thread_id, user_id, agent_id)
+                    VALUES ($1, $2, $3)
+                    ON CONFLICT (thread_id, user_id) DO UPDATE SET agent_id = EXCLUDED.agent_id, created_at = NOW()
+                    """,
+                    thread_id,
+                    user_id,
+                    agent_id,
+                )
+            except Exception as exc:
+                if _is_missing_relation_error(exc, "thread_votes"):
+                    raise ValueError("thread_votes_unavailable") from exc
+                raise
 
     async def update_thread_speed(self, thread_id: str, mode: str) -> None:
         pool = await self._ensure_pool()
