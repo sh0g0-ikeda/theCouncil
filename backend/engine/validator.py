@@ -221,6 +221,22 @@ def _looks_like_question_only_reply(text: str, labels: list[str]) -> bool:
     return not any(marker in (text or "") for marker in answer_markers)
 
 
+def _looks_like_mirrored_subquestion_reply(text: str, subquestion_text: str, labels: list[str]) -> bool:
+    content = text or ""
+    prompt_text = subquestion_text or ""
+    if not content or not prompt_text:
+        return False
+    if labels and _content_has_required_labels(content, labels):
+        return False
+    if not _looks_like_question_only_reply(content, labels):
+        return False
+    prompt_keywords = set(_keywords(prompt_text, limit=8))
+    content_keywords = set(_keywords(content, limit=10))
+    keyword_overlap = len(prompt_keywords & content_keywords) / max(len(prompt_keywords), 1) if prompt_keywords else 0.0
+    char_overlap = _char_overlap_ratio(content, prompt_text)
+    return keyword_overlap >= 0.6 or char_overlap >= 0.75
+
+
 def _extract_directive_type(text: str) -> str:
     match = re.search(r"MISSION:([a-z_]+)", text or "")
     return match.group(1) if match else ""
@@ -618,6 +634,7 @@ def validate_generated_reply(reply: dict[str, Any], context: dict[str, Any]) -> 
         return ValidationResult(False, f"Use {forced_axis} as the main axis.", analysis)
 
     contract_subquestion_id = str(turn_contract.get("must_answer_subquestion_id", "")).strip()
+    contract_subquestion_text = str(turn_contract.get("must_answer_subquestion_text", "")).strip()
     contract_required_labels = [str(label) for label in turn_contract.get("required_labels", []) if str(label).strip()]
     contract_answer_satisfied = False
 
@@ -627,6 +644,12 @@ def validate_generated_reply(reply: dict[str, Any], context: dict[str, Any]) -> 
         return ValidationResult(False, f"Use these labels explicitly: {' / '.join(contract_required_labels[:3])}.", analysis)
     if turn_contract.get("forbid_question_only") and _looks_like_question_only_reply(str(reply.get("content", "")), contract_required_labels):
         return ValidationResult(False, "Answer the assigned question directly instead of only repeating it.", analysis)
+    if contract_subquestion_text and _looks_like_mirrored_subquestion_reply(
+        str(reply.get("content", "")),
+        contract_subquestion_text,
+        contract_required_labels,
+    ):
+        return ValidationResult(False, "Do not mirror the same subquestion back. Give a concrete answer.", analysis)
     if contract_subquestion_id:
         contract_answer_satisfied = True
 

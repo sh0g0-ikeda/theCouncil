@@ -294,6 +294,32 @@ class ScriptedDiscussionRunner:
                 self.state.last_user_post_id = post["id"]
                 self.state.user_reply_pending = 2
 
+    def _find_post_by_id(self, posts: list[dict[str, Any]], post_id: Any) -> dict[str, Any] | None:
+        try:
+            target_id = int(post_id)
+        except (TypeError, ValueError):
+            return None
+        return next((post for post in reversed(posts) if int(post.get("id") or -1) == target_id), None)
+
+    def _select_subquestion_obligation(
+        self,
+        thread: dict[str, Any],
+        debate: DebateState,
+    ) -> tuple[str, dict[str, Any]] | None:
+        best: tuple[str, dict[str, Any]] | None = None
+        best_post_id = -1
+        for agent_id in thread["agent_ids"]:
+            if agent_id not in self.agents:
+                continue
+            subquestion = debate.get_priority_subquestion_for(agent_id)
+            if not subquestion:
+                continue
+            post_id = int(subquestion.get("post_id") or subquestion.get("created_post_id") or -1)
+            if post_id >= best_post_id:
+                best = (agent_id, subquestion)
+                best_post_id = post_id
+        return best
+
     async def _resolve_turn(self, thread: dict[str, Any], posts: list[dict[str, Any]]) -> ResolvedTurn | None:
         debate = await self._ensure_debate_state(thread)
         ai_posts = [post for post in posts if post.get("agent_id")]
@@ -362,6 +388,15 @@ class ScriptedDiscussionRunner:
             target_post = ai_posts[-1]
         else:
             target_post = None
+
+        subquestion_obligation = self._select_subquestion_obligation(thread, debate)
+        if subquestion_obligation:
+            obligated_speaker_id, obligated_subquestion = subquestion_obligation
+            if obligated_speaker_id != speaker_id:
+                speaker_id = obligated_speaker_id
+            obligated_target = self._find_post_by_id(posts, obligated_subquestion.get("post_id"))
+            if obligated_target is not None:
+                target_post = obligated_target
 
         assigned_side = str(turn.get("assigned_side", "")).strip() or debate.get_agent_side(speaker_id)
         return ResolvedTurn(

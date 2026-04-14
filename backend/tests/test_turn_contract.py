@@ -245,3 +245,32 @@ def test_validate_generated_reply_allows_first_define_turn_without_explicit_defi
     )
 
     assert result.ok is True
+
+
+def test_validate_generated_reply_rejects_mirrored_subquestion_loop() -> None:
+    result = validate_generated_reply(
+        {
+            "main_axis": "war ethics",
+            "content": "その『やむをえない時』って、結局誰が決めるんや？",
+            "stance": "disagree",
+            "local_stance_to_target": "disagree",
+            "proposition_stance": "oppose",
+            "camp_function": "ethics",
+            "subquestion_id": "sq:1:0",
+        },
+        {
+            "target_post": {"id": 3, "content": "Who should decide when war is unavoidable?"},
+            "conflict_axis": "war ethics",
+            "assigned_side": "oppose",
+            "assigned_camp_function": "ethics",
+            "required_subquestion_id": "sq:1:0",
+            "turn_contract": {
+                "must_answer_subquestion_id": "sq:1:0",
+                "must_answer_subquestion_text": "Who should decide when war is unavoidable?",
+                "forbid_question_only": True,
+            },
+        },
+    )
+
+    assert result.ok is False
+    assert "directly" in result.retry_hint.lower() or "concrete answer" in result.retry_hint.lower()
