@@ -183,6 +183,44 @@ def _extract_definition_terms(text: str, pending_terms: list[str]) -> list[str]:
     return resolved[:3]
 
 
+def _normalize_turn_contract(payload: Any) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+    required_labels: list[str] = []
+    for value in payload.get("required_labels", []):
+        label = str(value).strip()
+        if label and label not in required_labels:
+            required_labels.append(label)
+    must_define_terms: list[str] = []
+    for value in payload.get("must_define_terms", []):
+        term = str(value).strip()
+        if term and term not in must_define_terms:
+            must_define_terms.append(term)
+    return {
+        "must_answer_subquestion_id": str(payload.get("must_answer_subquestion_id", "")).strip(),
+        "must_answer_subquestion_text": str(payload.get("must_answer_subquestion_text", "")).strip(),
+        "must_define_terms": must_define_terms[:3],
+        "required_labels": required_labels[:4],
+        "forbid_question_only": bool(payload.get("forbid_question_only")),
+        "resolution_target": str(payload.get("resolution_target", "")).strip(),
+    }
+
+
+def _content_has_required_labels(text: str, labels: list[str]) -> bool:
+    content = text or ""
+    return all(f"{label}:" in content or f"{label}：" in content for label in labels)
+
+
+def _looks_like_question_only_reply(text: str, labels: list[str]) -> bool:
+    if labels and _content_has_required_labels(text, labels):
+        return False
+    question_marks = (text or "").count("?") + (text or "").count("？")
+    if question_marks <= 0:
+        return False
+    answer_markers = ("結論:", "結論：", "判断主体:", "判断主体：", "判断基準:", "判断基準：", "定義:", "定義：")
+    return not any(marker in (text or "") for marker in answer_markers)
+
+
 def _extract_directive_type(text: str) -> str:
     match = re.search(r"MISSION:([a-z_]+)", text or "")
     return match.group(1) if match else ""
@@ -558,6 +596,7 @@ def validate_generated_reply(reply: dict[str, Any], context: dict[str, Any]) -> 
     directive_type = _extract_directive_type(str(context.get("private_directive", "")))
     constraint_kind = str(context.get("active_constraint_kind", "")).strip()
     constraint_schema = dict(context.get("active_constraint_schema") or {})
+    turn_contract = _normalize_turn_contract(context.get("turn_contract"))
     meta_intervention_kind = str(context.get("meta_intervention_kind", "")).strip()
     stance = str(reply.get("stance", "disagree"))
     recent_axes = [str(axis) for axis in context.get("agent_recent_axes", [])]
@@ -577,10 +616,25 @@ def validate_generated_reply(reply: dict[str, Any], context: dict[str, Any]) -> 
     if forced_axis and analysis.effective_axis != forced_axis:
         return ValidationResult(False, f"Use {forced_axis} as the main axis.", analysis)
 
-    if target_post.get("content") and not analysis.addresses_target and not meta_intervention_kind:
+    contract_subquestion_id = str(turn_contract.get("must_answer_subquestion_id", "")).strip()
+    contract_required_labels = [str(label) for label in turn_contract.get("required_labels", []) if str(label).strip()]
+    contract_answer_satisfied = False
+
+    if contract_subquestion_id and analysis.subquestion_id != contract_subquestion_id:
+        return ValidationResult(False, f"Answer subquestion {contract_subquestion_id} directly.", analysis)
+    if contract_required_labels and not _content_has_required_labels(str(reply.get("content", "")), contract_required_labels):
+        return ValidationResult(False, f"Use these labels explicitly: {' / '.join(contract_required_labels[:3])}.", analysis)
+    if turn_contract.get("forbid_question_only") and _looks_like_question_only_reply(str(reply.get("content", "")), contract_required_labels):
+        return ValidationResult(False, "Answer the assigned question directly instead of only repeating it.", analysis)
+    if contract_subquestion_id:
+        contract_answer_satisfied = True
+
+    addresses_current_target = analysis.addresses_target or contract_answer_satisfied
+
+    if target_post.get("content") and not addresses_current_target and not meta_intervention_kind:
         return ValidationResult(False, "Answer the target post's core claim directly.", analysis)
 
-    if directive_type in {"rebut_core_claim", "deepen_axis"} and target_post.get("content") and not analysis.addresses_target:
+    if directive_type in {"rebut_core_claim", "deepen_axis"} and target_post.get("content") and not addresses_current_target:
         return ValidationResult(False, "Follow the mission and address the target claim.", analysis)
 
     if directive_type in {"rebut_core_claim", "defend_self_consistency"} and stance not in {"disagree", "shift"}:
@@ -596,6 +650,9 @@ def validate_generated_reply(reply: dict[str, Any], context: dict[str, Any]) -> 
     required_kind = str(context.get("required_response_kind", ""))
     if pending_terms and required_kind in {"define", "differentiate"} and not analysis.definition_terms:
         return ValidationResult(False, f"Resolve at least one pending term: {' / '.join(pending_terms[:2])}.", analysis)
+    contract_define_terms = [str(term) for term in turn_contract.get("must_define_terms", []) if str(term).strip()]
+    if contract_define_terms and not ({*analysis.definition_terms} & {*contract_define_terms}):
+        return ValidationResult(False, f"Define at least one required term: {' / '.join(contract_define_terms[:2])}.", analysis)
 
     assigned_side = str(context.get("assigned_side", "")).strip()
     assigned_side_label = str(context.get("assigned_side_label", "")).strip() or assigned_side
@@ -637,7 +694,7 @@ def validate_generated_reply(reply: dict[str, Any], context: dict[str, Any]) -> 
     if allowed_axes and analysis.effective_axis not in allowed_axes:
         return ValidationResult(False, f"Stay on one of these axes only: {' / '.join(allowed_axes[:2])}.", analysis)
 
-    if constraint_schema.get("must_address_target") and target_post.get("content") and not analysis.addresses_target:
+    if constraint_schema.get("must_address_target") and target_post.get("content") and not addresses_current_target:
         return ValidationResult(False, "Address the current target directly.", analysis)
 
     if constraint_schema.get("must_include_tradeoff") and not _has_tradeoff_markers(str(reply.get("content", ""))):
@@ -646,7 +703,7 @@ def validate_generated_reply(reply: dict[str, Any], context: dict[str, Any]) -> 
     if constraint_kind == "tradeoff" and not _has_tradeoff_markers(str(reply.get("content", ""))):
         return ValidationResult(False, "State a concrete tradeoff or cost.", analysis)
 
-    if constraint_kind == "refocus" and target_post.get("content") and analysis.target_overlap <= 0.0 and not analysis.definition_terms:
+    if constraint_kind == "refocus" and target_post.get("content") and not addresses_current_target and not analysis.definition_terms:
         return ValidationResult(False, "Refocus on the target claim instead of drifting away.", analysis)
 
     # Persona anchor check: for attack/steelman/supplement, at least one required_concept must appear

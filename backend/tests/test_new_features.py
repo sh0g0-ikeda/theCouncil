@@ -98,6 +98,59 @@ def test_debate_state_alerts():
     assert "camp_reassert" in d.alerts
 
 
+def test_debate_state_deduplicates_similar_open_subquestions():
+    d = DebateState()
+    base_analysis = {
+        "effective_axis": "war ethics",
+        "proposition_stance": "support",
+        "camp_function": "state_capacity",
+        "argument_fingerprint": "fp-1",
+        "claim_units": [
+            {
+                "claim_key": "claim-1",
+                "text": "Who should decide when war is unavoidable?",
+                "terms": ["war", "decide", "unavoidable"],
+            }
+        ],
+    }
+
+    d.record_post(
+        speaker_id="caesar",
+        target_post={"id": 10, "agent_id": "einstein"},
+        focus_axis="war ethics",
+        debate_function="attack",
+        stance="disagree",
+        post_id=1,
+        analysis=base_analysis,
+        content="War may be justified when order collapses.",
+    )
+    d.record_post(
+        speaker_id="xi",
+        target_post={"id": 11, "agent_id": "einstein"},
+        focus_axis="war ethics",
+        debate_function="attack",
+        stance="disagree",
+        post_id=2,
+        analysis={
+            **base_analysis,
+            "argument_fingerprint": "fp-2",
+            "claim_units": [
+                {
+                    "claim_key": "claim-2",
+                    "text": "Who decides whether war is unavoidable?",
+                    "terms": ["war", "decide", "unavoidable"],
+                }
+            ],
+        },
+        content="Order sometimes requires force.",
+    )
+
+    assert len(d.subquestions) == 1
+    only_subquestion = next(iter(d.subquestions.values()))
+    assert only_subquestion["duplicate_count"] == 2
+    assert "camp_reassert" in d.alerts
+
+
 def test_debate_state_serialization_round_trip():
     d = DebateState()
     d.thread_subquestions = ["subq1", "subq2"]

@@ -264,6 +264,7 @@ def build_script_post_messages(
     assigned_camp_function: str = "",
     required_subquestion_id: str = "",
     required_subquestion_text: str = "",
+    turn_contract: dict[str, Any] | None = None,
     pending_definition_terms: list[str] | None = None,
     topic_axes: list[str] | None = None,
     recent_argument_fingerprints: list[str] | None = None,
@@ -301,6 +302,11 @@ def build_script_post_messages(
     abstract_terms = _normalize_list(abstract_terms)
     resolved_abstract_terms = _normalize_list(resolved_abstract_terms)
     recent_agent_conclusions = _normalize_list(recent_agent_conclusions)
+    turn_contract = dict(turn_contract or {})
+    contract_required_labels = _normalize_list(turn_contract.get("required_labels", []))
+    contract_define_terms = _normalize_list(turn_contract.get("must_define_terms", []))
+    contract_resolution_target = str(turn_contract.get("resolution_target", "")).strip()
+    contract_forbid_question_only = bool(turn_contract.get("forbid_question_only"))
 
     persona_lines = [
         f"人格: {persona.get('display_name', '?')} ({persona.get('label', '')})",
@@ -341,6 +347,14 @@ def build_script_post_messages(
         semantic_lines.append(f"required_subquestion_id: {required_subquestion_id}")
     if required_subquestion_text:
         semantic_lines.append(f"required_subquestion_text: {required_subquestion_text}")
+    if contract_required_labels:
+        semantic_lines.append(f"turn_contract_required_labels: {_join_items(contract_required_labels, separator=' / ')}")
+    if contract_define_terms:
+        semantic_lines.append(f"turn_contract_must_define_terms: {_join_items(contract_define_terms, separator=' / ')}")
+    if contract_resolution_target:
+        semantic_lines.append(f"turn_contract_resolution_target: {contract_resolution_target}")
+    if contract_forbid_question_only:
+        semantic_lines.append("turn_contract_forbid_question_only: true")
     if required_response_kind:
         semantic_lines.append(f"required_response_kind: {required_response_kind}")
     if topic_axes:
@@ -398,6 +412,22 @@ def build_script_post_messages(
             "- 60〜200文字程度に収める。",
         ]
     )
+
+    if contract_required_labels:
+        user_lines.append(
+            "- If turn_contract_required_labels is present, include each label literally in the body, for example 結論: ... / 判断主体: ... / 判断基準: ... ."
+        )
+        user_lines.append(
+            "- Start the body with the required labels in order. Put the direct answer under 結論 before any criticism or qualification."
+        )
+    if contract_define_terms:
+        user_lines.append(
+            "- If turn_contract_must_define_terms is present, define at least one of those terms explicitly in the body."
+        )
+    if contract_forbid_question_only:
+        user_lines.append(
+            "- Do not only restate the assigned question. Answer first, then criticize or qualify."
+        )
 
     return [
         {"role": "system", "content": _SCRIPT_POST_SYSTEM_PROMPT},
