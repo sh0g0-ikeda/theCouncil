@@ -56,6 +56,13 @@ def monthly_thread_limit(plan: str) -> int | None:
     return PLAN_MONTHLY_THREADS.get(plan, PLAN_MONTHLY_THREADS["free"])
 
 
+def monthly_thread_quota(plan: str, bonus: int = 0) -> int | None:
+    limit = monthly_thread_limit(plan)
+    if limit is None:
+        return None
+    return limit + max(0, bonus)
+
+
 def monthly_private_thread_limit(plan: str) -> int | None:
     return PLAN_MONTHLY_PRIVATE_THREADS.get(plan, 0)
 

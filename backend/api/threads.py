@@ -9,7 +9,7 @@ from api.report_contracts import CreateReportRequest
 from db.client import DatabaseClient, get_db
 from engine.discussion import start_discussion
 from engine.llm import generate_topic_tags, moderate_text
-from policies import clamp_max_posts, default_max_posts, max_agents, monthly_thread_limit
+from policies import clamp_max_posts, default_max_posts, max_agents, monthly_thread_limit, monthly_thread_quota
 from rate_limit import limiter
 from realtime import connection_manager
 from services.reporting import submit_thread_report
@@ -130,18 +130,24 @@ async def get_quota(
 
     plan = account.get("plan", "free")
     used = account.get("monthly_thread_count", 0)
-    limit = monthly_thread_limit(plan)
+    bonus = account.get("monthly_thread_bonus", 0)
+    limit = monthly_thread_quota(plan, bonus)
+    base_limit = monthly_thread_limit(plan)
     from policies import monthly_private_thread_limit
     private_used = account.get("monthly_private_thread_count", 0)
     private_limit = monthly_private_thread_limit(plan)
+    share_bonus_available = not await db.has_any_thread_share(internal_id)
     return {
         "plan": plan,
         "used": used,
+        "base_limit": base_limit,
+        "bonus": bonus,
         "limit": limit,
         "remaining": None if limit is None else max(0, limit - used),
         "private_used": private_used,
         "private_limit": private_limit,
         "private_remaining": None if private_limit is None else max(0, private_limit - private_used),
+        "share_bonus_available": share_bonus_available,
     }
 
 
@@ -167,7 +173,25 @@ async def share_thread(
     access = await require_thread_access(thread_id, db, user)
     internal_id = await resolve_internal_user_id(db, user)
     granted = await db.record_thread_share(internal_id, access.thread["id"])
-    return {"granted": granted, "bonus": 5 if granted else 0}
+    account = await db.fetch_user_normalized(internal_id)
+    if not account:
+        raise HTTPException(status_code=401, detail="User record was not provisioned")
+    plan = account.get("plan", "free")
+    bonus = account.get("monthly_thread_bonus", 0)
+    limit = monthly_thread_quota(plan, bonus)
+    return {
+        "granted": granted,
+        "bonus": 5 if granted else 0,
+        "quota": {
+            "plan": plan,
+            "used": account.get("monthly_thread_count", 0),
+            "base_limit": monthly_thread_limit(plan),
+            "bonus": bonus,
+            "limit": limit,
+            "remaining": None if limit is None else max(0, limit - account.get("monthly_thread_count", 0)),
+            "share_bonus_available": not await db.has_any_thread_share(internal_id),
+        },
+    }
 
 
 @router.post("/{thread_id}/reports")

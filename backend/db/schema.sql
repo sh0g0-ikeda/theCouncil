@@ -18,6 +18,7 @@ CREATE TABLE users (
   role VARCHAR NOT NULL DEFAULT 'user' CHECK (role IN ('user', 'admin')),
   plan VARCHAR NOT NULL DEFAULT 'free' CHECK (plan IN ('free', 'pro', 'ultra')),
   monthly_thread_count INTEGER NOT NULL DEFAULT 0,
+  monthly_thread_bonus INTEGER NOT NULL DEFAULT 0,
   thread_usage_month DATE NOT NULL DEFAULT DATE_TRUNC('month', NOW())::date,
   warning_count INTEGER NOT NULL DEFAULT 0,
   is_banned BOOLEAN NOT NULL DEFAULT FALSE,

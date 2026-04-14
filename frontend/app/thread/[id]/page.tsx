@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { signIn, useSession } from "next-auth/react";
@@ -10,18 +10,18 @@ import { apiFetch, type PostRecord, type ThreadSummary } from "@/lib/api";
 import { createThreadSocket } from "@/lib/websocket";
 
 const LOADING_TELOPS = [
-  "エージェントを呼び出しています",
-  "エージェントがタイムマシンに乗りました",
-  "まもなくエージェントが現代へ到着します",
-  "エージェントが席に着きました",
+  "AI????????????????",
+  "AI???????????????????",
+  "???????????????????",
+  "AI??????????????",
 ];
 
 const PHASE_LABELS: Record<number, string> = {
-  1: "定義",
-  2: "対立",
-  3: "深化",
-  4: "転換",
-  5: "収束",
+  1: "??",
+  2: "??",
+  3: "??",
+  4: "??",
+  5: "??",
 };
 
 function mergePost(current: PostRecord[], incoming: PostRecord) {
@@ -33,8 +33,18 @@ function mergePost(current: PostRecord[], incoming: PostRecord) {
 
 function buildShareText(topic: string, names: string[]) {
   const castLine =
-    names.length >= 2 ? `${names[0]}と${names[1]}が\n` : names.length === 1 ? `${names[0]}が\n` : "";
-  return `${castLine}「${topic}」について徹底討論！\n\nみんなの疑問を偉人AIが議論する掲示板！The Council`;
+    names.length >= 2 ? `${names[0]}?${names[1]}?` : names.length === 1 ? `${names[0]}?` : "";
+  return `${castLine}?${topic}??????????\n\n?????????AI???????? | The Council`;
+}
+
+function getShareButtonLabel(shared: boolean, shareBonusAvailable: boolean | undefined) {
+  if (shared) return "???? ?";
+  if (shareBonusAvailable === false) return "X????????????????";
+  return "X??????????????????+5?";
+}
+
+function getCompletedShareText() {
+  return "?????X????????????????????5??????";
 }
 
 export default function ThreadPage() {
@@ -47,7 +57,13 @@ export default function ThreadPage() {
   const [error, setError] = useState("");
   const [sending, setSending] = useState(false);
   const [shared, setShared] = useState(false);
-  const [quota, setQuota] = useState<{ remaining: number | null; limit: number | null } | null>(null);
+  const [quota, setQuota] = useState<{
+    remaining: number | null;
+    limit: number | null;
+    base_limit?: number | null;
+    bonus?: number;
+    share_bonus_available?: boolean;
+  } | null>(null);
   const [telopIndex, setTelopIndex] = useState(0);
   const [votes, setVotes] = useState<Record<string, number>>({});
   const [myVote, setMyVote] = useState<string | null>(null);
@@ -63,7 +79,17 @@ export default function ThreadPage() {
 
   useEffect(() => {
     if (!session?.user) return;
-    apiFetch<{ remaining: number | null; limit: number | null }>("/api/threads/quota", {}, session.user)
+    apiFetch<{
+      remaining: number | null;
+      limit: number | null;
+      base_limit?: number | null;
+      bonus?: number;
+      share_bonus_available?: boolean;
+    }>(
+      "/api/threads/quota",
+      {},
+      session.user
+    )
       .then(setQuota)
       .catch(() => {});
   }, [session, shared]);
@@ -102,7 +128,7 @@ export default function ThreadPage() {
         setVoteError("");
       })
       .catch((loadError) => {
-        setVoteError(loadError instanceof Error ? loadError.message : "投票情報の取得に失敗しました");
+        setVoteError(loadError instanceof Error ? loadError.message : "謚慕･ｨ諠・ｱ縺ｮ蜿門ｾ励↓螟ｱ謨励＠縺ｾ縺励◆");
       });
   }, [threadId, session]);
 
@@ -209,7 +235,7 @@ export default function ThreadPage() {
       setVotes(prevVotes);
       setMyVote(prevMyVote);
       setVoteError(
-        voteSubmitError instanceof Error ? voteSubmitError.message : "投票の送信に失敗しました"
+        voteSubmitError instanceof Error ? voteSubmitError.message : "謚慕･ｨ縺ｮ騾∽ｿ｡縺ｫ螟ｱ謨励＠縺ｾ縺励◆"
       );
     }
   };
@@ -256,8 +282,36 @@ export default function ThreadPage() {
 
     if (session?.user && !shared) {
       try {
-        await apiFetch(`/api/threads/${threadId}/share`, { method: "POST" }, session.user);
+        const result = await apiFetch<{
+          granted: boolean;
+          bonus: number;
+          quota?: {
+            remaining: number | null;
+            limit: number | null;
+            base_limit?: number | null;
+            bonus?: number;
+            share_bonus_available?: boolean;
+          };
+        }>(
+          `/api/threads/${threadId}/share`,
+          { method: "POST" },
+          session.user
+        );
         setShared(true);
+        setQuota((current) => {
+          if (result.quota) {
+            return result.quota;
+          }
+          if (!current) return current;
+          return {
+            ...current,
+            share_bonus_available: false,
+            remaining:
+              result.granted && current.remaining !== null
+                ? current.remaining + result.bonus
+                : current.remaining,
+          };
+        });
       } catch {
         // bonus failure is non-fatal
       }
@@ -267,7 +321,7 @@ export default function ThreadPage() {
   if (!thread) {
     return (
       <main className="rounded-3xl border border-board-border bg-board-paper p-6 text-sm text-board-muted shadow-board">
-        {error || "読み込み中..."}
+        {error || "隱ｭ縺ｿ霎ｼ縺ｿ荳ｭ..."}
       </main>
     );
   }
@@ -290,10 +344,10 @@ export default function ThreadPage() {
             <p className="mt-2 text-sm leading-6 text-board-muted">
               <span className="hidden sm:inline">{thread.agent_ids.join(" / ")} / </span>
               <span className="inline sm:hidden">{thread.agent_ids.length} agents / </span>
-              {posts.length} レス ・ {thread.state}
+              {posts.length} ?? ? {thread.state}
               {thread.current_phase != null ? (
                 <span className="ml-2 rounded-full bg-board-accent/10 px-2 py-0.5 text-xs font-medium text-board-accent">
-                  {PHASE_LABELS[thread.current_phase] ?? `P${thread.current_phase}`}フェーズ
+                  {PHASE_LABELS[thread.current_phase] ?? `P${thread.current_phase}`}????
                 </span>
               ) : null}
             </p>
@@ -309,8 +363,8 @@ export default function ThreadPage() {
               <svg viewBox="0 0 24 24" className="h-3.5 w-3.5 fill-current" aria-hidden="true">
                 <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.746l7.73-8.835L1.254 2.25H8.08l4.258 5.63 5.906-5.63Zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
               </svg>
-              {shared ? "共有済み ✓" : "Xで共有するとスレッド作成回数+5！"}
-              {!shared && quota ? <span className="ml-1 opacity-70">（今月残り{quota.remaining === null ? "∞" : quota.remaining}本）</span> : null}
+              {getShareButtonLabel(shared, quota?.share_bonus_available)}
+              {!shared && quota ? <span className="ml-1 opacity-70">?????{quota.remaining === null ? "?" : quota.remaining}??</span> : null}
             </button>
           </div>
         </div>
@@ -336,8 +390,8 @@ export default function ThreadPage() {
 
       {thread.state === "completed" && (
         <div className="rounded-2xl border border-board-accent/30 bg-emerald-50 p-5">
-          <p className="mb-1 text-sm font-bold text-board-ink">議論が完結しました</p>
-          <p className="mb-4 text-xs text-board-muted">面白かったらXでシェアして、スレッド作成回数を+5獲得しよう</p>
+          <p className="mb-1 text-sm font-bold text-board-ink">議論が完了しました</p>
+          <p className="mb-4 text-xs text-board-muted">{getCompletedShareText()}</p>
           <button
             type="button"
             onClick={shareOnX}
@@ -355,7 +409,7 @@ export default function ThreadPage() {
         ? (() => {
             return (
               <div className="rounded-2xl border border-board-border bg-board-paper p-4 shadow-board">
-                <p className="mb-3 text-xs font-semibold tracking-wide text-board-muted">一番キレてたのは誰？</p>
+                <p className="mb-3 text-xs font-semibold tracking-wide text-board-muted">??????????</p>
                 <div className="flex flex-wrap gap-2">
                   {voteCandidates.map((agent, index) => {
                     const count = votes[agent.id] ?? 0;
@@ -373,9 +427,9 @@ export default function ThreadPage() {
                             : "border-board-border bg-white text-board-ink hover:border-rose-300 hover:text-rose-500"
                         ].join(" ")}
                       >
-                        {isTop ? <span>👑</span> : null}
+                        {isTop ? <span>??</span> : null}
                         <span>{agent.name}</span>
-                        <span className={isVoted ? "text-rose-400" : "text-board-muted"}>♡</span>
+                        <span className={isVoted ? "text-rose-400" : "text-board-muted"}>?</span>
                         <span className="font-bold">{count}</span>
                       </button>
                     );
@@ -388,7 +442,7 @@ export default function ThreadPage() {
         : null}
 
       <div className="flex h-16 items-center justify-center rounded-2xl border border-dashed border-board-border bg-board-paper/50 text-xs text-board-muted">
-        広告スペース
+        ????????
       </div>
 
       <div ref={bottomRef} />
@@ -396,7 +450,7 @@ export default function ThreadPage() {
       <section className="sticky bottom-4 rounded-3xl border border-board-border bg-board-paper/95 p-4 shadow-board backdrop-blur">
         <textarea
           className="h-28 w-full rounded-2xl border border-board-border bg-white px-4 py-3 text-sm leading-7 text-board-ink outline-none transition focus:border-board-accent"
-          placeholder="議論に参加（30〜220文字）"
+          placeholder="????????30?220???"
           value={input}
           onChange={(event) => setInput(event.target.value)}
           maxLength={220}
@@ -404,7 +458,7 @@ export default function ThreadPage() {
         <div className="mt-3 flex items-center justify-between gap-4">
           <div className="text-xs text-board-muted">
             {input.length} / 220
-            {input.length < 30 && !isOwner ? <span className="ml-2">・30文字以上必要</span> : null}
+            {input.length < 30 && !isOwner ? <span className="ml-2">?30??????</span> : null}
             {error ? <span className="ml-3 text-board-warn">{error}</span> : null}
           </div>
           <button
@@ -413,7 +467,7 @@ export default function ThreadPage() {
             disabled={sending}
             className="rounded-full bg-board-accent px-5 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {sending ? "送信中..." : "書き込む"}
+            {sending ? "???..." : "????"}
           </button>
         </div>
       </section>

@@ -22,10 +22,10 @@ class ThreadRepositoryMixin:
                 user = await self._normalize_thread_quota(conn, user_id)
                 if user["is_banned"]:
                     raise ValueError("user_banned")
-                from policies import monthly_thread_limit
+                from policies import monthly_thread_quota
 
                 plan = user.get("plan", "free")
-                _limit = monthly_thread_limit(plan)
+                _limit = monthly_thread_quota(plan, user.get("monthly_thread_bonus", 0))
                 if _limit is not None and user["monthly_thread_count"] >= _limit:
                     raise ValueError("free_plan_limit")
 
@@ -209,6 +209,7 @@ class ThreadRepositoryMixin:
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
             async with conn.transaction():
+                await self._normalize_thread_quota(conn, user_id)
                 existing = await conn.fetchval(
                     "SELECT 1 FROM thread_shares WHERE user_id = $1 AND thread_id = $2",
                     user_id,
@@ -216,15 +217,21 @@ class ThreadRepositoryMixin:
                 )
                 if existing:
                     return False
+                bonus_already_used = await conn.fetchval(
+                    "SELECT 1 FROM thread_shares WHERE user_id = $1 LIMIT 1",
+                    user_id,
+                )
                 await conn.execute(
                     "INSERT INTO thread_shares (user_id, thread_id) VALUES ($1, $2)",
                     user_id,
                     thread_id,
                 )
+                if bonus_already_used:
+                    return False
                 await conn.execute(
                     """
                     UPDATE users
-                    SET monthly_thread_count = GREATEST(0, monthly_thread_count - 5)
+                    SET monthly_thread_bonus = monthly_thread_bonus + 5
                     WHERE id = $1
                     """,
                     user_id,
@@ -291,6 +298,15 @@ class ThreadRepositoryMixin:
                 "SELECT 1 FROM thread_shares WHERE user_id = $1 AND thread_id = $2",
                 user_id,
                 thread_id,
+            )
+        return bool(row)
+
+    async def has_any_thread_share(self, user_id: str) -> bool:
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchval(
+                "SELECT 1 FROM thread_shares WHERE user_id = $1 LIMIT 1",
+                user_id,
             )
         return bool(row)
 

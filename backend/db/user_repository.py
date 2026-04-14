@@ -111,6 +111,10 @@ class UserRepositoryMixin:
                     WHEN thread_usage_month < $2 THEN 0
                     ELSE monthly_thread_count
                 END,
+                monthly_thread_bonus = CASE
+                    WHEN thread_usage_month < $2 THEN 0
+                    ELSE monthly_thread_bonus
+                END,
                 thread_usage_month = CASE
                     WHEN thread_usage_month < $2 THEN $2
                     ELSE thread_usage_month

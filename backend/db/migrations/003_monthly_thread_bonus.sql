@@ -1,0 +1,2 @@
+ALTER TABLE users
+  ADD COLUMN IF NOT EXISTS monthly_thread_bonus INTEGER NOT NULL DEFAULT 0;
