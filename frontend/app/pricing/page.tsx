@@ -214,6 +214,19 @@ export default function PricingPage() {
         })}
       </div>
 
+      <div className="rounded-2xl border border-board-border bg-board-paper p-4 text-sm text-board-muted">
+        <span>決済やプラン変更に関する法定表記は </span>
+        <a
+          href="https://eovwebsite.vercel.app/tokushoho.html"
+          target="_blank"
+          rel="noreferrer"
+          className="font-semibold text-board-accent underline underline-offset-2 hover:text-emerald-700"
+        >
+          特定商取引法に基づく表記
+        </a>
+        <span> をご確認ください。</span>
+      </div>
+
       {currentPlan !== "free" && (
         <div className="rounded-2xl border border-board-border bg-board-paper p-4 text-sm text-board-muted">
           <span>無料プランへの即時変更は上の Free から行えます。Free を押した時点で無料プランへ切り替わります。支払い方法の変更や請求履歴の確認は </span>
