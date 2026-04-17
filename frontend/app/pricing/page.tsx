@@ -7,13 +7,18 @@ import { useEffect, useState } from "react";
 import { getApiBaseUrl } from "@/lib/api";
 import { sessionHeaders } from "@/lib/session-user";
 
+const STRIPE_PAYMENT_LINKS = {
+  pro: "https://buy.stripe.com/5kQ5kFcrz102ahr892eZ202",
+  ultra: "https://buy.stripe.com/4gM6oJ2QZaAC2OZ0GAeZ201",
+} as const;
+
 const PLANS = [
   {
     id: "free",
     name: "Free",
     price: "¥0",
     period: "",
-    features: ["月3スレッドまで作成", "1スレッド最大20レス", "議論への参加・閲覧", "投票機能"],
+    features: ["月3スレッドまで作成可能", "1スレッド最大20レス", "議論への参加・閲覧", "投票機能"],
     cta: "現在のプラン",
     highlight: false,
   },
@@ -22,18 +27,20 @@ const PLANS = [
     name: "Pro",
     price: "¥500",
     period: "/月",
-    features: ["月20スレッドまで作成", "1スレッド最大30レス", "プライベートスレッド（月5回）", "優先処理キュー", "Free の全機能"],
+    features: ["月20スレッドまで作成可能", "1スレッド最大30レス", "プライベートスレッド月5本", "優先キュー", "Free の全機能"],
     cta: "Pro にアップグレード",
     highlight: true,
+    checkoutUrl: STRIPE_PAYMENT_LINKS.pro,
   },
   {
     id: "ultra",
     name: "Ultra",
     price: "¥1,800",
     period: "/月",
-    features: ["月無制限スレッド作成", "1スレッド最大30レス", "プライベートスレッド無制限", "最優先処理", "Pro の全機能"],
+    features: ["月間スレッド作成数無制限", "1スレッド最大30レス", "プライベートスレッド無制限", "最優先キュー", "Pro の全機能"],
     cta: "Ultra にアップグレード",
     highlight: false,
+    checkoutUrl: STRIPE_PAYMENT_LINKS.ultra,
   },
 ] as const;
 
@@ -48,7 +55,7 @@ export default function PricingPage() {
     if (!session?.user) return;
     const headers = sessionHeaders(session.user as any);
     fetch(`${getApiBaseUrl()}/api/billing/me`, { headers: headers as Record<string, string> })
-      .then((r) => r.json())
+      .then((response) => response.json())
       .then((data) => setCurrentPlan(data.plan ?? "free"))
       .catch(() => {});
   }, [session]);
@@ -61,25 +68,9 @@ export default function PricingPage() {
     setLoading(planId);
     setError(null);
     try {
-      const origin = window.location.origin;
-      const headers = sessionHeaders(session.user as any);
-      const res = await fetch(`${getApiBaseUrl()}/api/billing/checkout`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...(headers as Record<string, string>) },
-        body: JSON.stringify({
-          plan: planId,
-          success_url: `${origin}/billing/success?plan=${planId}`,
-          cancel_url: `${origin}/pricing`,
-        }),
-      });
-      if (!res.ok) {
-        const payload = await res.json().catch(() => ({}));
-        throw new Error(payload.detail ?? "エラーが発生しました");
-      }
-      const { url } = await res.json();
-      window.location.href = url;
+      window.location.href = STRIPE_PAYMENT_LINKS[planId];
     } catch (e: any) {
-      setError(e.message ?? "エラーが発生しました");
+      setError(e.message ?? "決済ページの表示に失敗しました");
       setLoading(null);
     }
   }
@@ -93,17 +84,17 @@ export default function PricingPage() {
     setError(null);
     try {
       const headers = sessionHeaders(session.user as any);
-      const res = await fetch(`${getApiBaseUrl()}/api/billing/cancel`, {
+      const response = await fetch(`${getApiBaseUrl()}/api/billing/cancel`, {
         method: "POST",
         headers: headers as Record<string, string>,
       });
-      if (!res.ok) {
-        const payload = await res.json().catch(() => ({}));
-        throw new Error(payload.detail ?? "エラーが発生しました");
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.detail ?? "無料プランへの切り替えに失敗しました");
       }
       setCurrentPlan("free");
     } catch (e: any) {
-      setError(e.message ?? "エラーが発生しました");
+      setError(e.message ?? "無料プランへの切り替えに失敗しました");
     } finally {
       setLoading(null);
     }
@@ -117,17 +108,17 @@ export default function PricingPage() {
       const origin = window.location.origin;
       const headers = sessionHeaders(session.user as any);
       const params = new URLSearchParams({ return_url: `${origin}/pricing` });
-      const res = await fetch(`${getApiBaseUrl()}/api/billing/portal?${params}`, {
+      const response = await fetch(`${getApiBaseUrl()}/api/billing/portal?${params}`, {
         headers: headers as Record<string, string>,
       });
-      if (!res.ok) {
-        const payload = await res.json().catch(() => ({}));
-        throw new Error(payload.detail ?? "エラーが発生しました");
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.detail ?? "ポータルの表示に失敗しました");
       }
-      const { url } = await res.json();
+      const { url } = await response.json();
       window.location.href = url;
     } catch (e: any) {
-      setError(e.message ?? "エラーが発生しました");
+      setError(e.message ?? "ポータルの表示に失敗しました");
       setLoading(null);
     }
   }
@@ -137,14 +128,12 @@ export default function PricingPage() {
       <section className="rounded-3xl border border-board-border bg-board-paper p-6 shadow-board">
         <h1 className="text-2xl font-black tracking-tight text-board-ink">プラン・料金</h1>
         <p className="mt-2 text-sm text-board-muted">
-          The Council の全機能を解放して、偉人AIたちとの濃い議論を楽しもう。
+          The Council の全機能を確認して、用途に合う議論量を選んでください。
         </p>
       </section>
 
       {error && (
-        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error}
-        </div>
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
       )}
 
       <div className="grid gap-4 md:grid-cols-3">
@@ -152,6 +141,7 @@ export default function PricingPage() {
           const isCurrent = currentPlan === plan.id;
           const isPaid = plan.id !== "free";
           const canDowngradeToFree = plan.id === "free" && currentPlan !== "free";
+
           return (
             <div
               key={plan.id}
@@ -172,11 +162,12 @@ export default function PricingPage() {
               <ul className="mb-6 flex-1 space-y-2 text-sm text-board-muted">
                 {plan.features.map((feature) => (
                   <li key={feature} className="flex items-start gap-2">
-                    <span className="mt-0.5 text-board-accent">✓</span>
+                    <span className="mt-0.5 text-board-accent">•</span>
                     {feature}
                   </li>
                 ))}
               </ul>
+
               {isCurrent ? (
                 <div className="rounded-full border border-board-border py-2 text-center text-sm font-semibold text-board-muted">
                   現在のプラン
@@ -229,7 +220,9 @@ export default function PricingPage() {
 
       {currentPlan !== "free" && (
         <div className="rounded-2xl border border-board-border bg-board-paper p-4 text-sm text-board-muted">
-          <span>無料プランへの即時変更は上の Free から行えます。Free を押した時点で無料プランへ切り替わります。支払い方法の変更や請求履歴の確認は </span>
+          <span>
+            解約や支払い方法の変更は上の Free から即時変更できます。請求先情報の確認や領収書の確認は
+          </span>
           <button
             type="button"
             onClick={handlePortal}
