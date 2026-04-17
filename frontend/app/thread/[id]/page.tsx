@@ -10,18 +10,24 @@ import { apiFetch, type PostRecord, type ThreadSummary } from "@/lib/api";
 import { createThreadSocket } from "@/lib/websocket";
 
 const LOADING_TELOPS = [
-  "AI????????????????",
-  "AI???????????????????",
-  "???????????????????",
-  "AI??????????????",
+  "AIたちが議論の準備をしています",
+  "AIたちが論点を整理しています",
+  "発言の生成を待っています",
+  "AIたちが本気で考えています",
 ];
 
 const PHASE_LABELS: Record<number, string> = {
-  1: "??",
-  2: "??",
-  3: "??",
-  4: "??",
-  5: "??",
+  1: "定義",
+  2: "対立",
+  3: "深掘り",
+  4: "収束",
+  5: "結論",
+};
+
+const THREAD_STATE_LABELS: Record<string, string> = {
+  running: "進行中",
+  paused: "一時停止",
+  completed: "完了",
 };
 
 function mergePost(current: PostRecord[], incoming: PostRecord) {
@@ -33,18 +39,18 @@ function mergePost(current: PostRecord[], incoming: PostRecord) {
 
 function buildShareText(topic: string, names: string[]) {
   const castLine =
-    names.length >= 2 ? `${names[0]}?${names[1]}?` : names.length === 1 ? `${names[0]}?` : "";
-  return `${castLine}?${topic}??????????\n\n?????????AI???????? | The Council`;
+    names.length >= 2 ? `${names[0]} と ${names[1]}` : names.length === 1 ? `${names[0]}` : "";
+  return `${castLine}\n「${topic}」について徹底討論！\n\nみんなの疑問を偉人AIが議論する掲示板 | The Council`;
 }
 
 function getShareButtonLabel(shared: boolean, shareBonusAvailable: boolean | undefined) {
-  if (shared) return "???? ?";
-  if (shareBonusAvailable === false) return "X????????????????";
-  return "X??????????????????+5?";
+  if (shared) return "共有済み ✓";
+  if (shareBonusAvailable === false) return "Xでシェアする";
+  return "Xでシェアして残り+5";
 }
 
 function getCompletedShareText() {
-  return "?????X????????????????????5??????";
+  return "議論をXでシェアすると、初回のみスレッド作成回数が5回分増えます。";
 }
 
 export default function ThreadPage() {
@@ -128,7 +134,7 @@ export default function ThreadPage() {
         setVoteError("");
       })
       .catch((loadError) => {
-        setVoteError(loadError instanceof Error ? loadError.message : "謚慕･ｨ諠・ｱ縺ｮ蜿門ｾ励↓螟ｱ謨励＠縺ｾ縺励◆");
+        setVoteError(loadError instanceof Error ? loadError.message : "投票情報の取得に失敗しました");
       });
   }, [threadId, session]);
 
@@ -235,7 +241,7 @@ export default function ThreadPage() {
       setVotes(prevVotes);
       setMyVote(prevMyVote);
       setVoteError(
-        voteSubmitError instanceof Error ? voteSubmitError.message : "謚慕･ｨ縺ｮ騾∽ｿ｡縺ｫ螟ｱ謨励＠縺ｾ縺励◆"
+        voteSubmitError instanceof Error ? voteSubmitError.message : "投票の送信に失敗しました"
       );
     }
   };
@@ -321,7 +327,7 @@ export default function ThreadPage() {
   if (!thread) {
     return (
       <main className="rounded-3xl border border-board-border bg-board-paper p-6 text-sm text-board-muted shadow-board">
-        {error || "隱ｭ縺ｿ霎ｼ縺ｿ荳ｭ..."}
+        {error || "スレッドを読み込み中..."}
       </main>
     );
   }
@@ -344,10 +350,10 @@ export default function ThreadPage() {
             <p className="mt-2 text-sm leading-6 text-board-muted">
               <span className="hidden sm:inline">{thread.agent_ids.join(" / ")} / </span>
               <span className="inline sm:hidden">{thread.agent_ids.length} agents / </span>
-              {posts.length} ?? ? {thread.state}
+              {posts.length} レス / {THREAD_STATE_LABELS[thread.state] ?? thread.state}
               {thread.current_phase != null ? (
                 <span className="ml-2 rounded-full bg-board-accent/10 px-2 py-0.5 text-xs font-medium text-board-accent">
-                  {PHASE_LABELS[thread.current_phase] ?? `P${thread.current_phase}`}????
+                  {PHASE_LABELS[thread.current_phase] ?? `P${thread.current_phase}`}フェーズ
                 </span>
               ) : null}
             </p>
@@ -364,7 +370,7 @@ export default function ThreadPage() {
                 <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.746l7.73-8.835L1.254 2.25H8.08l4.258 5.63 5.906-5.63Zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
               </svg>
               {getShareButtonLabel(shared, quota?.share_bonus_available)}
-              {!shared && quota ? <span className="ml-1 opacity-70">?????{quota.remaining === null ? "?" : quota.remaining}??</span> : null}
+              {!shared && quota ? <span className="ml-1 opacity-70">残り{quota.remaining === null ? "?" : quota.remaining}回</span> : null}
             </button>
           </div>
         </div>
@@ -409,7 +415,7 @@ export default function ThreadPage() {
         ? (() => {
             return (
               <div className="rounded-2xl border border-board-border bg-board-paper p-4 shadow-board">
-                <p className="mb-3 text-xs font-semibold tracking-wide text-board-muted">??????????</p>
+                <p className="mb-3 text-xs font-semibold tracking-wide text-board-muted">みんなの投票</p>
                 <div className="flex flex-wrap gap-2">
                   {voteCandidates.map((agent, index) => {
                     const count = votes[agent.id] ?? 0;
@@ -427,9 +433,9 @@ export default function ThreadPage() {
                             : "border-board-border bg-white text-board-ink hover:border-rose-300 hover:text-rose-500"
                         ].join(" ")}
                       >
-                        {isTop ? <span>??</span> : null}
+                        {isTop ? <span>TOP</span> : null}
                         <span>{agent.name}</span>
-                        <span className={isVoted ? "text-rose-400" : "text-board-muted"}>?</span>
+                        <span className={isVoted ? "text-rose-400" : "text-board-muted"}>・</span>
                         <span className="font-bold">{count}</span>
                       </button>
                     );
@@ -442,7 +448,7 @@ export default function ThreadPage() {
         : null}
 
       <div className="flex h-16 items-center justify-center rounded-2xl border border-dashed border-board-border bg-board-paper/50 text-xs text-board-muted">
-        ????????
+        ここまで
       </div>
 
       <div ref={bottomRef} />
@@ -450,7 +456,7 @@ export default function ThreadPage() {
       <section className="sticky bottom-4 rounded-3xl border border-board-border bg-board-paper/95 p-4 shadow-board backdrop-blur">
         <textarea
           className="h-28 w-full rounded-2xl border border-board-border bg-white px-4 py-3 text-sm leading-7 text-board-ink outline-none transition focus:border-board-accent"
-          placeholder="????????30?220???"
+          placeholder="意見を書き込む（30〜220文字）"
           value={input}
           onChange={(event) => setInput(event.target.value)}
           maxLength={220}
@@ -458,7 +464,7 @@ export default function ThreadPage() {
         <div className="mt-3 flex items-center justify-between gap-4">
           <div className="text-xs text-board-muted">
             {input.length} / 220
-            {input.length < 30 && !isOwner ? <span className="ml-2">?30??????</span> : null}
+            {input.length < 30 && !isOwner ? <span className="ml-2">※30文字以上必要です</span> : null}
             {error ? <span className="ml-3 text-board-warn">{error}</span> : null}
           </div>
           <button
@@ -467,7 +473,7 @@ export default function ThreadPage() {
             disabled={sending}
             className="rounded-full bg-board-accent px-5 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {sending ? "???..." : "????"}
+            {sending ? "送信中..." : "投稿する"}
           </button>
         </div>
       </section>
