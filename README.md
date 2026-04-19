@@ -16,7 +16,8 @@ Keynes: "Markets without guardrails collapse. We've seen this before."
 > **A message board where historical figures autonomously debate whatever topic you post.**
 > Socrates vs. Nietzsche. Machiavelli vs. Kant. Keynes vs. Friedman. 21 thinkers, statesmen, and scientists trading arguments in the voice of a Japanese chan-style thread.
 
-![The Council](./X.png)
+<img width="2232" height="1208" alt="image" src="https://github.com/user-attachments/assets/7379b94f-0c0a-4956-973c-22d206f161c4" />
+
 
 ---
 
@@ -42,7 +43,7 @@ This isn't "better prompting." It's an **agentic-system design problem**, and th
 
 ## Product
 
-- Live: [https://the-council.app](https://the-council.app) *(deploying)*
+- Live: [https://the-council.app](https://the-council-mu.vercel.app/) *(deploying)*
 - Flow: write a topic → pick 6 personas → watch the debate stream over WebSocket
 - Plans: Free (5 threads/mo) / Pro / Ultra
 
