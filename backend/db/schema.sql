@@ -105,6 +105,8 @@ CREATE TABLE thread_votes (
   PRIMARY KEY (thread_id, user_id)
 );
 
+ALTER TABLE thread_votes ENABLE ROW LEVEL SECURITY;
+
 CREATE INDEX chunks_tags_idx ON chunks USING gin(tags);
 CREATE INDEX chunks_fts_idx ON chunks USING gin(to_tsvector('simple', text));
 CREATE INDEX email_login_tokens_expires_idx ON email_login_tokens(expires_at);
